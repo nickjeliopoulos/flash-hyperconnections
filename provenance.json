@@ -1,0 +1,11 @@
+{
+  "source_repository": "https://github.com/pytorch/pytorch",
+  "source_base_commit": "bfdb520668015d0b151caae814a5390c34c2a0be",
+  "source_note": "Local integrated matrix-exponential changes; hashes identify the actual extraction inputs, not just the base commit.",
+  "source_files": {
+    "aten/src/ATen/native/cuda/MatrixExpKernel.cu": "e14e5cd5fc060f6fa7b358371bbafe848a423cda21cae193f067c50395edd211",
+    "aten/src/ATen/native/cuda/MatrixExpSmall.cuh": "25d2770737c15f41ac4b1055cbd5ccfe10a264e23197031e4b9ac02d44fb999d"
+  },
+  "cutlass_commit": "098de2a652cf8f00fd70b2df54051c7eccbb855a",
+  "adaptation": "Package namespaces, standalone input checks, and extension entry points. Device arithmetic and launch choices retained."
+}
