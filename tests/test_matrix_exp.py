@@ -5,7 +5,7 @@ import torch
 
 import flash_hypercons as fh
 
-from .reference import check_error, reference
+from .reference import check_error, diagonal_reference, nilpotent_reference, reference
 
 pytestmark = pytest.mark.cuda
 DTYPES = [torch.float32, torch.float16, torch.bfloat16]
@@ -23,6 +23,46 @@ def test_dimensions(dtype, n, batch):
     assert y.device == grad.device == a.device
     check_error(y, reference(a))
     check_error(grad, reference(a.mT, g), backward=True)
+
+
+@pytest.mark.parametrize("dtype", DTYPES)
+@pytest.mark.parametrize("n", [4, 9, 16, 32])
+@pytest.mark.parametrize("family", ["diagonal", "nilpotent", "nonnormal"])
+def test_matrix_families(dtype, n, family):
+    scales = torch.tensor([0.25, 1.0, 4.0], device="cuda")[:, None, None]
+    diagonal = torch.linspace(-0.5, 0.5, n, device="cuda")
+    diagonal[1] = diagonal[0]  # Repeated eigenvalues exercise the divided-difference limit.
+    shift = torch.diag(torch.ones(n - 1, device="cuda"), diagonal=1)
+    if family == "diagonal":
+        a = scales * diagonal.diag()
+        oracle = diagonal_reference
+    elif family == "nilpotent":
+        a = scales * shift
+        oracle = nilpotent_reference
+    else:
+        # Bounded eigenvalues with large off-diagonal entries: unlike rotations,
+        # these matrices are nonnormal, but their outputs still fit in FP16.
+        a = diagonal.diag() + scales * shift
+        oracle = reference
+    a = a.to(dtype).requires_grad_()
+    expected = oracle(a.detach())
+    direction = torch.randn_like(a, dtype=torch.float32)
+    direction = direction / torch.linalg.matrix_norm(direction, ord=1)[:, None, None]
+    for magnitude in (0.0, 1e-3, 1.0, 100.0):
+        g = (direction * magnitude).to(dtype)
+        y = fh.matrix_exp(a)
+        (grad,) = torch.autograd.grad(y, a, g)
+        expected_grad = oracle(a.detach().mT, g)
+        assert y.dtype == grad.dtype == dtype
+        assert y.device == grad.device == a.device
+        check_error(y, expected)
+        check_error(grad, expected_grad, backward=True)
+        if magnitude:
+            # Also compare at unit upstream scale so small gradients do not
+            # disappear into the absolute component of the error criterion.
+            check_error(grad / magnitude, expected_grad / magnitude, backward=True)
+        else:
+            torch.testing.assert_close(grad, torch.zeros_like(grad), atol=0, rtol=0)
 
 
 @pytest.mark.parametrize("dtype", DTYPES)

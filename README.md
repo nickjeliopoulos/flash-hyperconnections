@@ -1,8 +1,8 @@
 # flash-hypercons
 
-Small batched CUDA matrix exponentials for PyTorch, with an optimized backward.
-The initial implementation uses an adaptive degree-18 Taylor approximation with
-scaling and squaring, FP32 arithmetic, and a structured Frechet derivative.
+A collection of useful GPU primitives and operators for Hyperconnections-like architectures.
+Including matrix exponential, stream-mixing variants, and fused architectural blocks.
+Native CUDA C/C++ implementations that extend or replace PyTorch operators.
 
 ## Install
 
@@ -62,7 +62,7 @@ with fh.use_backend():
     y = compiled(x)
 ```
 
-## Development
+## Development and Testing
 
 ```bash
 python -m pytest -q
@@ -81,12 +81,3 @@ checks, extraction comparison, and remaining H100 and multi-GPU checks.
 Python implementations live under `flash_hypercons/ops/matrix_exp/`; CUDA sources
 live under `csrc/`. Additional implementations can use the same public entry
 points without introducing a backend registry.
-
-## Provenance
-
-The CUDA implementation was extracted from the local PyTorch small-matrix
-exponential integration. `provenance.json` identifies its base commit, exact
-source hashes, and pinned CUTLASS revision. Kernel arithmetic and launch choices
-are retained. The polynomial follows Bader, Blanes, and Casas (2019),
-[Computing the Matrix Exponential with an Optimized Taylor Polynomial Approximation](https://doi.org/10.3390/math7121174).
-See `LICENSE` and `licenses/` for attribution and redistribution notices.

@@ -1,3 +1,5 @@
+from contextlib import nullcontext
+
 import pytest
 import torch
 
@@ -137,6 +139,111 @@ def test_compile(scoped):
     if scoped:
         _, names = op_names(lambda: captured(a))
         assert "flash_hypercons::_matrix_exp" not in names
+
+
+class _MatrixExpComposition(torch.nn.Module):
+    def __init__(self, matrix_exp):
+        super().__init__()
+        self.matrix_exp = matrix_exp
+
+    def forward(self, a, vectors):
+        mixing = self.matrix_exp(a * 0.25)
+        return (mixing @ vectors).tanh() + 0.125 * vectors
+
+
+@pytest.mark.compile
+@pytest.mark.parametrize("dtype", [torch.float32, torch.float16, torch.bfloat16])
+@pytest.mark.parametrize("n", [4, 9, 16, 32])
+@pytest.mark.parametrize("scoped", [False, True])
+def test_compile_composed_dynamic_batches(dtype, n, scoped):
+    # Each parametrization is a distinct compilation workload. Isolate Dynamo's
+    # code-object cache without constraining legitimate shape specialization.
+    torch.compiler.reset()
+    try:
+        model = _MatrixExpComposition(torch.linalg.matrix_exp if scoped else fh.matrix_exp)
+        compiled = torch.compile(model, fullgraph=True, dynamic=True)
+        for batch in (3, 35, 129, 1, 0, 3):
+            a = (torch.randn(batch, n, n, device="cuda") * 0.1).to(dtype).requires_grad_()
+            vectors = (torch.randn(batch, n, 3, device="cuda") * 0.2).to(dtype).requires_grad_()
+            upstream = torch.randn_like(vectors) * 0.1
+
+            def run(fn, a=a, vectors=vectors, upstream=upstream):
+                with fh.use_backend() if scoped else nullcontext():
+                    y = fn(a, vectors)
+                # Backward deliberately runs after leaving the routing scope.
+                gradients = torch.autograd.grad(y, (a, vectors), upstream)
+                return y, gradients
+
+            expected, expected_grads = run(model)
+            run(compiled)  # Compile/warm up before collecting dispatch evidence.
+            (actual, gradients), names = op_names(lambda: run(compiled))
+            assert actual.dtype == dtype and actual.device == a.device
+            check_error(actual, expected)
+            for grad, expected_grad in zip(gradients, expected_grads, strict=True):
+                assert grad.dtype == dtype and grad.device == a.device
+                check_error(grad, expected_grad, backward=True)
+            if batch:
+                # Empty graphs may legitimately elide the operation entirely.
+                assert "flash_hypercons::_matrix_exp" in names
+                assert "flash_hypercons::_frechet" in names
+    finally:
+        torch.compiler.reset()
+
+
+@pytest.mark.parametrize("dtype", [torch.float32, torch.float16, torch.bfloat16])
+@pytest.mark.parametrize("n", [4, 9, 16, 32])
+@pytest.mark.parametrize("scoped", [False, True])
+def test_cuda_graph_replay(dtype, n, scoped):
+    # A partial block and a padded size exercise preparation and temporary
+    # allocations as well as the raw CUDA kernels.
+    batch = 35
+    static_a = torch.zeros(batch, n, n, device="cuda", dtype=dtype, requires_grad=True)
+    static_g = torch.zeros_like(static_a)
+    fn = torch.linalg.matrix_exp if scoped else fh.matrix_exp
+
+    def step():
+        with fh.use_backend() if scoped else nullcontext():
+            y = fn(static_a)
+        (grad,) = torch.autograd.grad(y, static_a, static_g)
+        return y, grad
+
+    # Prove this workload routes through both custom ops before capture.
+    _, names = op_names(step)
+    assert "flash_hypercons::_matrix_exp" in names
+    assert "flash_hypercons::_frechet" in names
+    stream = torch.cuda.Stream()
+    stream.wait_stream(torch.cuda.current_stream())
+    with torch.cuda.stream(stream):
+        for _ in range(3):
+            step()
+    torch.cuda.current_stream().wait_stream(stream)
+    graph = torch.cuda.CUDAGraph()
+    with torch.cuda.graph(graph, stream=stream):
+        static_y, static_grad = step()
+
+    base = torch.randn(batch, n, n, device="cuda")
+    base = base - base.mT  # Large norms without exponential overflow.
+    base = base / torch.linalg.matrix_norm(base, ord=1)[:, None, None]
+    per_matrix_scale = torch.linspace(0.5, 1.5, batch, device="cuda")[:, None, None]
+    direction = torch.randn_like(base) * 0.2
+    # Move up and down through adaptive scaling regimes; zero is revisited after
+    # nonzero work to expose stale output or accumulated-gradient bugs.
+    for norm, grad_scale in ((0.1, 0.25), (6.0, 32.0), (24.0, 1e-3), (0.0, 0.0), (0.2, 2.0)):
+        a = (base * per_matrix_scale * norm).to(dtype)
+        g = (direction * grad_scale).to(dtype)
+        with torch.no_grad():
+            static_a.copy_(a)
+            static_g.copy_(g)
+        graph.replay()
+        assert static_y.dtype == static_grad.dtype == dtype
+        assert static_y.device == static_grad.device == a.device
+        check_error(static_y, reference(a))
+        expected_grad = reference(a.mT, g)
+        check_error(static_grad, expected_grad, backward=True)
+        if grad_scale:
+            check_error(static_grad / grad_scale, expected_grad / grad_scale, backward=True)
+        else:
+            torch.testing.assert_close(static_grad, torch.zeros_like(static_grad), atol=0, rtol=0)
 
 
 def test_autocast_and_parameter():
