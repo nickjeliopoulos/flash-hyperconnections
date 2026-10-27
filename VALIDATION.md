@@ -113,3 +113,39 @@ partition were drained; the shared H100 partition required an account outside
 this allocation. SM90 compilation succeeded, but that does not establish H100
 runtime correctness or performance. The two-GPU device-guard test also remains
 unrun. Broader version/platform compatibility and public wheels are not claimed.
+
+## Benchmark plotting (2026-10-27)
+
+On an A100-SXM4-40GB with stock PyTorch 2.14.1+cu130, **33 focused tests passed**:
+15 benchmark/plotting checks and 18 rotation-regression cases through angle 1,000.
+An end-to-end benchmark collected 48 rows for N=4/9, B=35, all three dtypes,
+forward/forward-plus-backward, both backends, and skew-symmetric inputs with
+target column norms 3 and 1,000. It generated all three plot types using the
+test suite's normalized maximum-error metric. The final source hash matches the
+report. Local data and figures are ignored under `.agents/forum/plotting-20261027/`
+(`revised.json`, `revised-figures/`, Slurm job 12030994). These small runs validate
+the plotting pipeline, not representative performance or tail-error statistics.
+
+## Correctness-to-benchmark driver (2026-10-27)
+
+The complete `python -m benchmarks.run matrix_exp` workflow passed on an
+NVIDIA A100-SXM4-40GB using Python 3.12.13 and stock PyTorch 2.14.1+cu130
+(Slurm job 12031058, exit 0). Its default correctness gate ran the numerical,
+routing, and integration suites: **489 passed, 1 skipped**, including 467 passing
+CUDA-marked tests. The skip requires two GPUs. Timing started only after pytest
+finished successfully.
+
+The subsequent benchmark recorded 48 rows for N=4/9, B=35, FP32/FP16/BF16,
+forward/forward-plus-backward, and skew inputs with column norms 3/1,000.
+Three timing trials and five precision samples per case exercised the pipeline;
+these small counts do not establish representative performance or tail errors.
+The driver saved the gate evidence and environment metadata in `report.json`
+before exporting 36 PNG/SVG files across all three plot types. The canonical
+report hash and all figure hashes were verified, and the figures were inspected.
+Artifacts remain ignored under `.agents/forum/pipeline-20261027/run-12031058/`.
+
+The **34 infrastructure tests passed** on CPU and in the A100 job. They cover
+real pytest subprocess outcomes (failure, all-skipped, CPU-only, expected failure,
+teardown failure, collection failure, and empty selection), stopping downstream
+work, saving metadata before rendering, shared timing, and generic operator plot
+metadata. PNG/PDF/SVG exports are covered. Ruff and whitespace checks also passed.

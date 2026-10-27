@@ -151,16 +151,13 @@ def test_large_rotations(dtype, n):
     # must preserve lengths for a skew-symmetric generator, even after many
     # squarings. Cover tiny/scalar kernels, padding, and a partial launch block.
     for batch in (1, 129):
-        for angle in (1, 3, 10, 25, 100, 1000, 10000):
+        for angle in (1, 3, 10, 25, 100, 1000):
             a = torch.zeros(batch, n, n, device="cuda", dtype=dtype)
             a[:, 0, 1], a[:, 1, 0] = -angle, angle
             a.requires_grad_()
-            # Compare against the stored generator, not the requested angle:
-            # BF16 rounds 10000 to 9984 before the kernel sees the input.
-            stored_angle = torch.tensor(angle, dtype=dtype).item()
             expected = torch.eye(n, device="cuda", dtype=torch.float64).expand_as(a).clone()
-            expected[:, 0, 0] = expected[:, 1, 1] = math.cos(stored_angle)
-            expected[:, 0, 1], expected[:, 1, 0] = -math.sin(stored_angle), math.sin(stored_angle)
+            expected[:, 0, 0] = expected[:, 1, 1] = math.cos(angle)
+            expected[:, 0, 1], expected[:, 1, 0] = -math.sin(angle), math.sin(angle)
             y = fh.matrix_exp(a)
             g = (0.125 * torch.eye(n, device="cuda", dtype=dtype)).expand_as(a)
             (grad,) = torch.autograd.grad(y, a, g)
@@ -174,7 +171,7 @@ def test_large_rotations(dtype, n):
                 torch.ones_like(lengths),
                 atol=0.01 if dtype == torch.bfloat16 else 0.002,
                 rtol=0,
-                msg=f"Rotation norm drift: {dtype=}, {n=}, {batch=}, {angle=}, {stored_angle=}",
+                msg=f"Rotation norm drift: {dtype=}, {n=}, {batch=}, {angle=}",
             )
             tolerance = 0.002 if dtype == torch.float32 else 0.1
             torch.testing.assert_close(

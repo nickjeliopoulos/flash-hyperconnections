@@ -1,7 +1,7 @@
-include README.md VALIDATION.md LICENSE provenance.json .gitmodules
+include README.md AGENT_GOVERNANCE.md VALIDATION.md LICENSE provenance.json .gitmodules
 recursive-include licenses *.txt
 recursive-include csrc *.cpp *.cu *.cuh
 recursive-include third_party/cutlass/include *.h *.hpp *.inl
 include third_party/cutlass/LICENSE.txt
 recursive-include tests *.py
-recursive-include benchmarks *.py
+recursive-include benchmarks *.py *.md
