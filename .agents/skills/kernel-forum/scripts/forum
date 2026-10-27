@@ -1,0 +1,431 @@
+#!/usr/bin/env python3
+"""kernel-forum — a local, append-only journal for kernel optimization.
+
+Storage: plain Markdown files under the project-level `.agents/forum/` directory.
+No nested Git repository, automatic commits, or network synchronization.
+Concurrency: writes are serialized with an advisory file lock (fcntl.flock).
+
+Run `forum --help` for usage.
+"""
+
+import argparse
+import os
+import re
+import shutil
+import subprocess
+import sys
+import uuid
+from contextlib import contextmanager
+from datetime import datetime, timezone
+from pathlib import Path
+
+try:
+    import fcntl
+except ImportError:  # pragma: no cover - non-unix
+    fcntl = None
+
+ENTRY_START = "<<FORUM_ENTRY>>"
+ENTRY_END = "<<END_FORUM_ENTRY>>"
+DIR_NAME = Path(".agents") / "forum"
+DEFAULT_FORUM = "main"
+DEFAULT_COUNT = 5
+VALID_TYPES = ("opening", "message", "correction", "grounding-update")
+
+ENTRY_RE = re.compile(
+    rf"{re.escape(ENTRY_START)}\n(?P<entry>.*?)\n{re.escape(ENTRY_END)}",
+    re.DOTALL,
+)
+
+GIT_AVAILABLE = shutil.which("git") is not None
+
+
+# --------------------------------------------------------------------------- #
+# small helpers
+# --------------------------------------------------------------------------- #
+def die(msg, code=1):
+    print(f"kernel-forum: {msg}", file=sys.stderr)
+    sys.exit(code)
+
+
+def sanitize(name):
+    cleaned = re.sub(r"[^A-Za-z0-9_-]+", "-", name.strip()).strip("-")
+    return cleaned or "agent"
+
+
+def now_utc():
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def make_id(name):
+    ts = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+    return f"{ts}-{sanitize(name)}-{uuid.uuid4().hex[:6]}"
+
+
+# --------------------------------------------------------------------------- #
+# Git is used only to discover the host project root
+# --------------------------------------------------------------------------- #
+def host_git_toplevel(start):
+    if not GIT_AVAILABLE:
+        return None
+    res = subprocess.run(
+        ["git", "-C", str(start), "rev-parse", "--show-toplevel"],
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+    )
+    if res.returncode == 0:
+        return Path(res.stdout.strip())
+    return None
+
+
+# --------------------------------------------------------------------------- #
+# locating the forum directory / file
+# --------------------------------------------------------------------------- #
+def find_existing_dir():
+    env = os.environ.get("KERNEL_FORUM_DIR")
+    if env:
+        d = Path(env).expanduser()
+        return d if d.is_dir() else None
+    base = host_git_toplevel(Path.cwd()) or Path.cwd()
+    directory = base / DIR_NAME
+    return directory if directory.is_dir() else None
+
+
+def resolve_dir(create):
+    env = os.environ.get("KERNEL_FORUM_DIR")
+    if env:
+        d = Path(env).expanduser()
+        if create:
+            d.mkdir(parents=True, exist_ok=True)
+        elif not d.is_dir():
+            die(f"KERNEL_FORUM_DIR={env} is not a directory")
+        return d
+
+    existing = find_existing_dir()
+    if existing:
+        return existing
+    if not create:
+        die("no .agents/forum found — run `forum init` first")
+
+    base = host_git_toplevel(Path.cwd()) or Path.cwd()
+    d = base / DIR_NAME
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def forum_file(forum_dir, name):
+    # sanitize() keeps the name a single path segment — no traversal, no slashes.
+    return forum_dir / f"{sanitize(name)}.md"
+
+
+def require_forum(name, create_dir=False):
+    forum_dir = resolve_dir(create=create_dir)
+    path = forum_file(forum_dir, name)
+    if not path.exists():
+        die(f"forum '{name}' not found at {path} — run `forum init --forum {name}` first")
+    return forum_dir, path
+
+
+# --------------------------------------------------------------------------- #
+# locking
+# --------------------------------------------------------------------------- #
+@contextmanager
+def locked(path):
+    """Exclusive advisory lock keyed to a forum file, via a sidecar .lock."""
+    if fcntl is None:
+        die("file locking requires a Unix platform with fcntl")
+    lock_path = path.with_suffix(path.suffix + ".lock")
+    fh = open(lock_path, "w", encoding="utf-8")
+    try:
+        fcntl.flock(fh, fcntl.LOCK_EX)
+        yield
+    finally:
+        fcntl.flock(fh, fcntl.LOCK_UN)
+        fh.close()
+
+
+# --------------------------------------------------------------------------- #
+# rendering / parsing
+# --------------------------------------------------------------------------- #
+def render_entry(name, time_str, entry_id, type_, body):
+    return f"{ENTRY_START}\nNAME: {name}\nTIME: {time_str}\nID: {entry_id}\nTYPE: {type_}\n\n{body}\n{ENTRY_END}\n"
+
+
+def parse_entries(text):
+    entries = []
+    for match in ENTRY_RE.finditer(text):
+        block = match.group("entry")
+        lines = block.split("\n")
+        meta = {}
+        i = 0
+        while i < len(lines) and lines[i].strip() != "":
+            line = lines[i]
+            if ":" in line:
+                key, _, val = line.partition(":")
+                meta[key.strip()] = val.strip()
+            i += 1
+        body = "\n".join(lines[i + 1 :]).strip() if i < len(lines) else ""
+        if not meta.get("ID"):
+            continue  # malformed — skip rather than crash
+        entries.append(
+            {
+                "name": meta.get("NAME", "?"),
+                "time": meta.get("TIME", "?"),
+                "id": meta["ID"],
+                "type": meta.get("TYPE", "message"),
+                "body": body,
+                "raw": match.group(0),
+            }
+        )
+    return entries
+
+
+def get_grounding(text):
+    # Terminate at the next KNOWN section header, not any "## " — otherwise a
+    # markdown subheading inside the grounding text truncates (or empties) it.
+    m = re.search(
+        r"^##[ \t]+Grounding[ \t]*\n(?P<body>.*?)(?=^##[ \t]+(?:Instructions|Discussion)\b|\Z)",
+        text,
+        re.DOTALL | re.MULTILINE,
+    )
+    return m.group("body").strip() if m else ""
+
+
+def read_body_input(args):
+    if args.message is not None:
+        return args.message
+    if args.file == "-" or args.file is None and not sys.stdin.isatty():
+        return sys.stdin.read()
+    if args.file:
+        p = Path(args.file)
+        if not p.exists():
+            die(f"message file not found: {args.file}")
+        return p.read_text(encoding="utf-8")
+    die("no message provided (give a file path, --message, or pipe via stdin)")
+
+
+def reject_markers(text, what):
+    if ENTRY_START in text or ENTRY_END in text:
+        die(f"{what} may not contain forum entry markers")
+
+
+def validate_body(body):
+    body = body.strip()
+    if not body:
+        die("refusing to append an empty message")
+    reject_markers(body, "message body")
+    return body
+
+
+# --------------------------------------------------------------------------- #
+# commands
+# --------------------------------------------------------------------------- #
+def cmd_init(args):
+    forum_dir = resolve_dir(create=True)
+    path = forum_file(forum_dir, args.forum)
+    reject_markers(args.title, "title")
+
+    grounding = ""
+    if args.grounding:
+        gp = Path(args.grounding)
+        if not gp.exists():
+            die(f"grounding file not found: {args.grounding}")
+        grounding = gp.read_text(encoding="utf-8").strip()
+        reject_markers(grounding, "grounding")
+
+    opening = "Forum initialized."
+    if args.opening:
+        op = Path(args.opening)
+        if not op.exists():
+            die(f"opening file not found: {args.opening}")
+        opening = validate_body(op.read_text(encoding="utf-8"))
+
+    entry = render_entry(sanitize(args.agent), now_utc(), make_id(args.agent), "opening", opening)
+    content = (
+        f"# {args.title}\n\n"
+        f"## Grounding\n\n"
+        f"{grounding}\n\n"
+        f"## Instructions\n\n"
+        f"Use the `forum` CLI to participate. Do not edit this file by hand.\n"
+        f"Run `forum pull` before writing, append only, and never delete entries.\n\n"
+        f"## Discussion\n\n"
+        f"{entry}"
+    )
+
+    with locked(path):
+        if path.exists():
+            die(f"forum '{args.forum}' already exists at {path}; choose a new name")
+        path.write_text(content, encoding="utf-8")
+    print(f"Initialized forum '{args.forum}' at {path}")
+
+
+def cmd_append(args):
+    forum_dir, path = require_forum(args.forum)
+    if args.type not in VALID_TYPES:
+        die(f"invalid --type '{args.type}' (choose from: {', '.join(VALID_TYPES)})")
+
+    body = validate_body(read_body_input(args))
+    entry_id = make_id(args.agent)
+    entry = render_entry(sanitize(args.agent), now_utc(), entry_id, args.type, body)
+
+    with locked(path):
+        with path.open("a", encoding="utf-8") as stream:
+            stream.write("\n" + entry)
+            stream.flush()
+            os.fsync(stream.fileno())
+    print(f"Appended entry {entry_id} to forum '{args.forum}'")
+
+
+def read_forum(path):
+    with locked(path):
+        return path.read_text(encoding="utf-8")
+
+
+def _print_recent(path, count):
+    text = read_forum(path)
+    grounding = get_grounding(text)
+    entries = parse_entries(text)
+    print("## Grounding\n")
+    print(grounding if grounding else "(none)")
+    print("\n## Recent Discussion\n")
+    if not entries:
+        print("(no entries yet)")
+        return
+    recent = entries[-count:] if count > 0 else []
+    for e in recent:
+        print(f"[{e['id']}] {e['name']} ({e['type']}) {e['time']}")
+        print(e["body"])
+        print()
+
+
+def cmd_recent(args):
+    _, path = require_forum(args.forum)
+    _print_recent(path, args.count)
+
+
+def cmd_pull(args):
+    _, path = require_forum(args.forum)
+    _print_recent(path, args.count)
+
+
+def cmd_list(args):
+    _, path = require_forum(args.forum)
+    entries = parse_entries(read_forum(path))
+    if not entries:
+        print("(no entries yet)")
+        return
+    for e in entries:
+        first_line = e["body"].splitlines()[0] if e["body"] else ""
+        print(f"{e['id']}\t{e['time']}\t{e['name']}\t{e['type']}\t{first_line}")
+
+
+def cmd_show(args):
+    _, path = require_forum(args.forum)
+    entries = parse_entries(read_forum(path))
+    matches = [e for e in entries if e["id"] == args.entry_id]
+    if not matches:
+        matches = [e for e in entries if e["id"].startswith(args.entry_id)]
+    if not matches:
+        die(f"no entry matching '{args.entry_id}'")
+    if len(matches) > 1:
+        die(f"'{args.entry_id}' is ambiguous ({len(matches)} matches); use a longer id")
+    print(matches[0]["raw"])
+
+
+def cmd_search(args):
+    _, path = require_forum(args.forum)
+    with locked(path):
+        if shutil.which("rg"):
+            res = subprocess.run(["rg", "-n", "-i", "-F", "--context", "4", "--", args.query, str(path)])
+            sys.exit(res.returncode)
+        needle = args.query.lower()
+        hits = 0
+        for n, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+            if needle in line.lower():
+                print(f"{n}:{line}")
+                hits += 1
+        if hits == 0:
+            sys.exit(1)
+
+
+def cmd_forums(args):
+    forum_dir = find_existing_dir()
+    if not forum_dir:
+        die("no .agents/forum found — run `forum init` first")
+    files = sorted(forum_dir.glob("*.md"))
+    if not files:
+        print("(no forums yet)")
+        return
+    for f in files:
+        print(f.stem)
+
+
+# --------------------------------------------------------------------------- #
+# argument parsing
+# --------------------------------------------------------------------------- #
+def build_parser():
+    p = argparse.ArgumentParser(prog="forum", description=__doc__.splitlines()[0])
+    sub = p.add_subparsers(dest="command", required=True)
+
+    def add_forum_opt(sp):
+        sp.add_argument("--forum", default=DEFAULT_FORUM, help="forum name (default: main)")
+
+    sp = sub.add_parser("init", help="create a new forum")
+    sp.add_argument("--agent", required=True)
+    sp.add_argument("--title", default="Kernel Optimization")
+    sp.add_argument("--grounding", help="path to grounding markdown")
+    sp.add_argument("--opening", help="path to opening message markdown")
+    add_forum_opt(sp)
+    sp.set_defaults(func=cmd_init)
+
+    sp = sub.add_parser("append", help="append a message")
+    sp.add_argument("--agent", required=True)
+    sp.add_argument("--type", default="message", help=f"one of: {', '.join(VALID_TYPES)}")
+    sp.add_argument("-m", "--message", help="inline message text")
+    sp.add_argument("file", nargs="?", help="message file path, or - for stdin")
+    add_forum_opt(sp)
+    sp.set_defaults(func=cmd_append)
+
+    sp = sub.add_parser("recent", help="show grounding + recent entries")
+    sp.add_argument("--count", type=int, default=DEFAULT_COUNT)
+    add_forum_opt(sp)
+    sp.set_defaults(func=cmd_recent)
+
+    sp = sub.add_parser("pull", help="read local grounding and recent entries")
+    sp.add_argument("--count", type=int, default=DEFAULT_COUNT)
+    add_forum_opt(sp)
+    sp.set_defaults(func=cmd_pull)
+
+    sp = sub.add_parser("list", help="one line per entry")
+    add_forum_opt(sp)
+    sp.set_defaults(func=cmd_list)
+
+    sp = sub.add_parser("show", help="print a full entry by id")
+    sp.add_argument("entry_id")
+    add_forum_opt(sp)
+    sp.set_defaults(func=cmd_show)
+
+    sp = sub.add_parser("search", help="search the forum")
+    sp.add_argument("query")
+    add_forum_opt(sp)
+    sp.set_defaults(func=cmd_search)
+
+    sp = sub.add_parser("forums", help="list available forums")
+    sp.set_defaults(func=cmd_forums)
+
+    return p
+
+
+def main():
+    # Read/write UTF-8 regardless of locale (subagents/CI often run under C).
+    for stream in (sys.stdin, sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8")
+        except (AttributeError, ValueError):
+            pass
+    args = build_parser().parse_args()
+    args.func(args)
+
+
+if __name__ == "__main__":
+    main()

@@ -8,3 +8,7 @@ dist/
 .ruff_cache/
 .venv/
 results/
+
+# Local kernel experiments; keep the shared playground location discoverable.
+/.agents/forum/*
+!/.agents/forum/.gitkeep
