@@ -71,12 +71,12 @@ comparisons compute in FP32 and cast back, including the casts in the timing.
 Input and upstream-gradient hashes match across the two installed PyTorch builds.
 
 ```bash
-python benchmarks/matrix_exp.py \
+python benchmarks/ops/matrix_exp.py \
   --n 4 8 16 32 --batch 1 128 65536 --dtype fp32 fp16 bf16 \
   --output results/benchmark-a100.json
 
 # With the existing integrated PyTorch build's Python executable:
-python benchmarks/matrix_exp.py --backends torch \
+python benchmarks/ops/matrix_exp.py --backends torch \
   --n 4 8 16 32 --batch 1 128 65536 --dtype fp32 \
   --output results/benchmark-integrated-a100.json
 ```
@@ -149,3 +149,35 @@ real pytest subprocess outcomes (failure, all-skipped, CPU-only, expected failur
 teardown failure, collection failure, and empty selection), stopping downstream
 work, saving metadata before rendering, shared timing, and generic operator plot
 metadata. PNG/PDF/SVG exports are covered. Ruff and whitespace checks also passed.
+
+
+## Grouped benchmarks and unified visualization (2026-10-27)
+
+After moving matrix-exp to `benchmarks/ops/` and combining the plotting modules
+into `benchmarks/visualization.py`, **42 targeted CPU infrastructure and plotting
+tests passed**. Three unchanged numerical-measurement tests were deselected;
+input generation and numerical-measurement functions were checked against their
+previous source. Tests cover group selection and metadata for ops/layers/modules,
+report paths, the correctness gate, and all plot types and export formats.
+
+The unified visualization entry point regenerated 36 PNG/SVG figures from the
+saved A100 report with PyTorch imports explicitly disabled. The report hash and
+all artifact hashes matched the manifest. Outputs are local under
+`.reports/matrix_exp/visualization-check/`. No GPU timing or kernel behavior was
+changed or revalidated for this organization change.
+
+## Compact dtype summaries (2026-10-27)
+
+**46 targeted CPU infrastructure and plotting tests passed**; three unchanged
+numerical-measurement tests were deselected. Regression checks cover geometric
+mean speedup bar heights, pooled precision samples and quantiles, combining
+three dtypes and multiple families/workloads without extra pages, preserving raw
+records, rejecting inconsistent summaries, and removing obsolete manifest-listed
+figures while retaining unrelated files. Ruff and whitespace checks passed.
+
+The saved A100 report was rendered again with PyTorch imports disabled: six
+figures (three per mode), exported as 12 PNG/SVG files, now replace the previous
+36 files in `.reports/matrix_exp/visualization-check/`. Report and artifact hashes
+were verified and the forward speedup, CDF, and precision/speedup figures were
+visually inspected. This reuses the earlier small skew-input measurement run;
+it is a visualization check, not new GPU performance or kernel validation.

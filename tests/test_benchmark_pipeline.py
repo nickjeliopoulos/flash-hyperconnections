@@ -69,7 +69,7 @@ def test_pytest_gate_records_real_execution(tmp_path, source, passed, required_p
 @pytest.fixture
 def pipeline(monkeypatch):
     module = SimpleNamespace(TEST_FILES=("tests/test_example.py",), REQUIRED_TEST_MARKER="cuda")
-    monkeypatch.setattr(run, "load_operator", lambda name: module)
+    monkeypatch.setattr(run, "load_benchmark", lambda name, group="ops": module)
     return module
 
 
@@ -102,9 +102,10 @@ def test_pipeline_stops_before_downstream_work(tmp_path, monkeypatch, pipeline, 
     assert not (output / "figures").exists()
 
 
-def test_pipeline_saves_gate_and_measurements_before_rendering(tmp_path, monkeypatch, pipeline):
+@pytest.mark.parametrize("group", ["ops", "layers", "modules"])
+def test_pipeline_saves_gate_and_measurements_before_rendering(tmp_path, monkeypatch, pipeline, group):
     pytest.importorskip("matplotlib")
-    from benchmarks import plotting
+    from benchmarks import visualization
 
     output = tmp_path / "run"
     calls = []
@@ -135,24 +136,64 @@ def test_pipeline_saves_gate_and_measurements_before_rendering(tmp_path, monkeyp
             )
         return 0
 
-    real_plot = plotting.plot_report
+    real_plot = visualization.plot_report
 
     def plot(report, *args, **kwargs):
         assert report == json.loads((output / "report.json").read_text())
         assert report["correctness"]["status"] == "passed"
         assert report["correctness"]["scope"] == "subset"
         assert report["run"]["command"] == calls[1]
+        assert report["benchmark"] == {"group": group, "name": "example"}
         return real_plot(report, *args, **kwargs)
 
     monkeypatch.setattr(run, "run_command", command)
-    monkeypatch.setattr(plotting, "plot_report", plot)
-    run.run_pipeline("example", output, ["--size", "3"], gate_k="example", formats=("svg",))
+    monkeypatch.setattr(visualization, "plot_report", plot)
+    run.run_pipeline("example", output, ["--size", "3"], group=group, gate_k="example", formats=("svg",))
     assert calls[0][-2:] == ["-k", "example"]
     assert "--size" in calls[1]
+    assert calls[1][2] == f"benchmarks.{group}.example"
     assert (output / "figures" / "figures.json").exists()
     assert len(list((output / "figures").glob("*.svg"))) == 1
-    with pytest.raises(FileExistsError):
+    run.run_pipeline("example", output, ["--size", "3"], group=group, gate_k="example", formats=("svg",))
+    assert len(calls) == 4
+
+
+def test_failed_repeat_removes_stale_success(tmp_path, monkeypatch, pipeline):
+    output = tmp_path / "run"
+    for name in ("report.json", "correctness.json", "pytest.log", "benchmark.log", "figures/figures.json"):
+        path = output / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text('{"status": "passed", "required_passed": 1}')
+    (output / "notes.txt").write_text("Keep local notes")
+    monkeypatch.setattr(run, "run_command", lambda args, log: 0)
+    with pytest.raises(RuntimeError, match="Correctness gate failed"):
         run.run_pipeline("example", output, [])
+    assert not (output / "report.json").exists()
+    assert not (output / "figures/figures.json").exists()
+    assert (output / "notes.txt").read_text() == "Keep local notes"
+
+
+@pytest.mark.parametrize("operator", ["matrix_exp", "another_operator"])
+@pytest.mark.parametrize("group", ["ops", "layers", "modules"])
+def test_default_output_directory_is_per_operator(tmp_path, monkeypatch, operator, group):
+    monkeypatch.setattr(run, "REPORTS_ROOT", tmp_path / ".reports")
+    calls = []
+    monkeypatch.setattr(run, "run_pipeline", lambda *args, **kwargs: calls.append((args, kwargs)))
+    run.main([operator, "--group", group])
+    root = tmp_path / ".reports" if group == "ops" else tmp_path / ".reports" / group
+    assert calls[0][0][1] == root / operator
+    assert calls[0][1]["group"] == group
+    run.main([operator, "--group", group, "--output-dir", str(tmp_path / "custom")])
+    assert calls[1][0][1] == tmp_path / "custom"
+
+
+def test_load_flat_operator_benchmark():
+    module = run.load_benchmark("matrix_exp")
+    assert module.__name__ == "benchmarks.ops.matrix_exp"
+    assert module.TEST_FILES and module.REQUIRED_TEST_MARKER == "cuda"
+    for name, group in (("matrix_exp", "layers"), ("matrix_exp", "unknown"), ("../matrix_exp", "ops")):
+        with pytest.raises(ValueError):
+            run.load_benchmark(name, group)
 
 
 @pytest.mark.parametrize("flag", ["--output=other.json", "--plots", "--plot-from=data.json"])

@@ -10,6 +10,11 @@ PyTorch contract. Use the forum as durable experimental memory, whether working
 alone or with already-authorized collaborators. Invoking this skill does not by
 itself start additional agents or an open-ended background run.
 
+For autonomous kernel search bootstrapped from a DSL/compiler implementation
+(typically Triton → PTX → CUDA), use
+[kernel-ptx-match-forum](../kernel-ptx-match-forum/SKILL.md). It reuses this journal
+and adds a compiler prior and a campaign-local `KERNEL.md` design record.
+
 ## Local workspace
 
 Run from the project root. The bundled CLI defaults to `.agents/forum/`; only

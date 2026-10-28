@@ -7,12 +7,14 @@ import json
 import math
 import platform
 import statistics
+import sys
 from pathlib import Path
 
 if __package__:
-    from .common import measure, write_report
+    from ..common import REPORTS_ROOT, measure, write_report
 else:
-    from common import measure, write_report
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+    from benchmarks.common import REPORTS_ROOT, measure, write_report
 
 TEST_FILES = ("tests/test_matrix_exp.py", "tests/test_routing.py", "tests/test_integration.py")
 REQUIRED_TEST_MARKER = "cuda"
@@ -135,10 +137,8 @@ def upgrade_report(report):
 
 
 def render(report, args):
-    if __package__:
-        from .plotting import plot_report
-    else:
-        from plotting import plot_report
+    from benchmarks.visualization import plot_report
+
     manifest = plot_report(report, args.plots, baseline=args.baseline, formats=args.formats, quantile=args.quantile)
     print(f"Wrote {len(manifest['artifacts'])} figures to {args.plots}", flush=True)
 
@@ -154,7 +154,7 @@ def main():
     parser.add_argument("--warmup", type=int, default=5)
     parser.add_argument("--repeat", type=int, default=10)
     parser.add_argument("--trials", type=int, default=3)
-    parser.add_argument("--output", type=Path, default=Path("results/benchmark.json"))
+    parser.add_argument("--output", type=Path, default=REPORTS_ROOT / "matrix_exp" / "report.json")
     parser.add_argument(
         "--family", nargs="+", choices=["random", "skew", "neg_psd", "diagonal", "rotation"], default=["random"]
     )
@@ -232,6 +232,7 @@ def main():
     props = torch.cuda.get_device_properties(0)
     report = {
         "schema_version": 3,
+        "benchmark": {"group": "ops", "name": "matrix_exp"},
         "status": "running",
         "plotting": {
             "baseline": args.baseline,

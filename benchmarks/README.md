@@ -11,29 +11,37 @@ Run correctness tests, collect timings and numerical errors, save the report,
 then export PNG, PDF, and SVG figures:
 
 ```bash
-python -m benchmarks.run matrix_exp --output-dir results/matrix-exp-run -- \
+python -m benchmarks.run matrix_exp -- \
   --n 4 8 16 32 --batch 128 1024 --dtype fp32 fp16 bf16 \
   --precision --precision-samples 256
 ```
 
-The driver runs the operator's declared pytest files in a subprocess before
+The driver runs the benchmark's declared pytest files in a subprocess before
 starting a separate measurement process. For matrix-exp, these are the numerical,
 routing, and PyTorch integration suites. Failures, collection errors, and runs
 with no passing CUDA-marked tests stop the pipeline. Expected skips, such as a
 multi-GPU test on a single GPU, are recorded. An exit code of zero with only
 skipped or CPU tests is insufficient.
 
-The output directory must be new, so stale reports cannot look like a successful
-run. Omitting `--output-dir` creates a timestamped directory under `results/`.
-Driver options precede `--`; operator benchmark options follow it. Outputs are:
+Ops default to `.reports/<name>/report.json` in the repository. Layers and
+modules use `.reports/<group>/<name>/report.json`, so equal names in different
+groups do not share an output directory. This directory is ignored by
+Git. Repeated runs reuse it and replace the reports and logs; the driver clears
+previous reports and the figure manifest before testing so a failed run cannot
+present an earlier success as current. Use `--output-dir PATH` to retain a
+separate run. Driver options precede `--`; benchmark options follow it.
+Outputs within the benchmark directory are:
 
 - `correctness.json` and `pytest.log`: test counts, scope, command, and output.
 - `report.json` and `benchmark.log`: measurements, environment, correctness
   outcome, invocation, and timestamps. The complete report is saved before plots.
 - `figures/`: appropriate figures for the data and a `figures.json` manifest.
 
-Without `--precision`, the driver produces latency charts. With it, it also
-produces precision CDFs and precision-versus-speedup plots. `--formats png svg`
+Without `--precision`, the driver produces one speedup chart per mode. With it,
+it also produces one precision CDF and one precision-versus-speedup plot per mode.
+All dtypes share each figure; matrix families and workloads are aggregated.
+A matrix-exp run with both modes produces six figures total (each exported in
+the requested formats), regardless of the number of dtypes, families, or cases. `--formats png svg`
 and `--quantile 0.99` are driver options. For quick iteration, `--gate-k EXPR`
 selects existing pytest cases and records the gate as a **subset**, not full
 validation. Full validation remains the default.
@@ -42,24 +50,45 @@ The operator script also remains directly runnable for standalone measurement;
 its report explicitly records correctness as `not_run`:
 
 ```bash
-python benchmarks/matrix_exp.py --n 4 --batch 128 --precision \
-  --output results/measurement.json --plots results/measurement-figures
+python benchmarks/ops/matrix_exp.py --n 4 --batch 128 --precision \
+  --plots .reports/matrix_exp/figures
 ```
 
-On that direct entry point, `--plots` enables precision collection automatically.
-JSON stores
-individual timing trials, input/gradient hashes, environment metadata, and raw
+The direct entry point also defaults to `.reports/matrix_exp/report.json`.
+On that entry point, `--plots` enables precision collection automatically.
+JSON stores individual timing trials, input/gradient hashes, environment metadata, and raw
 per-matrix errors, so plotting never requires rerunning measurements:
 
 ```bash
-python benchmarks/matrix_exp.py --plot-from results/matrix-exp-run/report.json \
-  --plots results/replotted-figures --formats png svg --quantile 0.99
+python -m benchmarks.visualization .reports/matrix_exp/report.json \
+  --formats png svg --quantile 0.99
 ```
 
 Plot-only mode needs NumPy and Matplotlib, but does not import PyTorch or require
-CUDA/the extension. Older timing-only JSON reports can produce latency charts.
+CUDA/the extension. For legacy matrix-exp reports missing case metadata, use
+`python -m benchmarks.ops.matrix_exp --plot-from REPORT --plots DIRECTORY`;
+that operator-specific path upgrades old reports before rendering speedup charts.
 Incomplete reports and mismatched backend inputs are rejected. Outputs remain
 local ignored artifacts; no generated figures or data need to be committed.
+
+## Directory layout
+
+```text
+benchmarks/
+  ops/matrix_exp.py
+  layers/                 # layer benchmarks as they are added
+  modules/                # module benchmarks as they are added
+  run.py                  # shared correctness → timing → report → plots driver
+  common.py               # timing and JSON helpers
+  pytest_gate.py          # correctness evidence
+  visualization.py        # all plot types, style, report rendering, and plot CLI
+```
+
+The driver defaults to `--group ops`. Select `--group layers` or `--group modules`
+when adding those benchmarks, for example
+`python -m benchmarks.run NAME --group layers -- ...`. Each group uses the same correctness gate and report format. The
+report's `benchmark` metadata records its group and name; the existing per-row
+`operator` field holds the measured component's name for all three groups.
 
 ## Measurements and interpretation
 
@@ -72,7 +101,11 @@ Timings retain the existing synchronized wall-clock method, alternating backend
 order across trials. Forward includes the public Python wrapper and allocations.
 Forward + backward includes the forward call and `autograd.grad`; it is **not a
 backward-only latency**. Compilation and warmup are excluded. The bar charts show
-side-by-side median latencies, annotated with baseline latency / candidate latency.
+side-by-side backend speedups grouped by dtype, with the baseline at 1×.
+Each bar is the geometric mean of matched baseline/candidate median-latency
+ratios across all measured families, sizes, batches, and norms. Each case has
+equal weight. Labels include geometric-mean latency in microseconds; bar height
+always represents speedup. Individual case timings remain in the JSON report.
 
 Precision is collected outside timing, against native PyTorch FP64 (a numerical
 reference, not exact arithmetic). Forward errors measure outputs; forward +
@@ -95,11 +128,12 @@ Axes use a symmetric-log scale with a small linear region to display exact zeros
 The backend still runs at the full timed batch size; only FP64 references are
 chunked (`--reference-chunk`, default 32). This bounds reference memory while
 preserving batch-dependent dispatch. Each sampled matrix has equal weight in the
-CDF; cases with more samples contribute more. CDFs pool sizes/batches/norms within
-each operator, dtype, mode, and family; use separate runs to inspect individual
-norm regimes. A batch of one is one sample, not a meaningful distribution by itself.
+CDF; cases with more samples contribute more. CDFs pool families, sizes, batches,
+and norms within each dtype and mode. Each backend/dtype pair has a distinct
+curve in the same figure; use separate runs to inspect individual norm regimes. A batch of one is one sample, not a meaningful distribution by itself.
 
-Precision-versus-speedup plots use the per-case empirical p99 error by default
+Precision-versus-speedup plots show one point per backend/dtype pair, using the
+pooled empirical p99 error and geometric-mean speedup by default
 (`--quantile 1` selects maximum error). Quantiles use the inverse empirical CDF,
 including failures as infinity. Nonfinite quantiles appear on an explicitly
 labeled band. Baseline errors appear at speedup 1. The plot footer also reports
@@ -113,13 +147,13 @@ through 1,000, before dtype rounding, and `--family` for random, skew-symmetric,
 negative semidefinite, diagonal, or embedded rotation generators. Every requested family/norm/size/batch/dtype combination is measured.
 
 ```bash
-python benchmarks/matrix_exp.py --n 4 16 32 --batch 129 \
+python benchmarks/ops/matrix_exp.py --n 4 16 32 --batch 129 \
   --family random skew neg_psd diagonal --norm 0.1 1 3 6 10 \
-  --precision --output results/families.json --plots results/families
+  --precision --output .reports/matrix_exp/families/report.json --plots .reports/matrix_exp/families/figures
 
-python benchmarks/matrix_exp.py --n 2 4 8 9 16 32 --batch 129 \
+python benchmarks/ops/matrix_exp.py --n 2 4 8 9 16 32 --batch 129 \
   --family rotation --norm 1 3 10 100 1000 \
-  --precision --output results/rotations.json --plots results/rotations
+  --precision --output .reports/matrix_exp/rotations/report.json --plots .reports/matrix_exp/rotations/figures
 ```
 
 Large positive-spectrum inputs can overflow low-precision outputs; failure counts
@@ -130,13 +164,14 @@ rotation regression in `tests/test_matrix_exp.py`.
 
 ## Reusing the plotting interface
 
-Each plot type lives in a separate file and accepts an existing Matplotlib Axes:
+All plot types live in `benchmarks/visualization.py` and accept an existing
+Matplotlib Axes:
 
-- `plot_cdf.plot_cdf(ax, {backend: errors}, ...)`
-- `plot_latency.plot_latency(ax, labels, {backend: milliseconds}, baseline=..., ...)`
-- `plot_precision_speedup.plot_precision_speedup(ax, points, baseline=..., ...)`
+- `plot_cdf(ax, {backend: errors}, ...)`
+- `plot_speedup(ax, labels, {backend: milliseconds}, baseline=..., ...)`
+- `plot_precision_speedup(ax, points, baseline=..., ...)`
 
-`plotting.py` contains the shared `STYLE`, backend colors, error statistics,
+`visualization.py` also contains the shared `STYLE`, backend colors, error statistics,
 measurement pairing, and `plot_report` adapter. Comparisons follow FLA's simple
 Matplotlib blue/orange baseline/candidate palette and light grids, retaining the
 former PyTorch PR's DejaVu Sans and editable SVG text. There is no dependency on
@@ -146,7 +181,7 @@ the caller's plotting configuration.
 Future operators can supply the same report without importing matrix-exp code:
 
 ```python
-from benchmarks.plotting import plot_report
+from benchmarks.visualization import plot_report
 
 # Include one row per case/backend, with matching inputs across backends.
 report = {
@@ -159,7 +194,7 @@ report = {
     },
     "results": rows,
 }
-plot_report(report, "results/my-operator")
+plot_report(report, ".reports/my_operator/figures")
 ```
 
 Each row has this interface (latencies are milliseconds):
@@ -192,14 +227,17 @@ Each row has this interface (latencies are milliseconds):
 Hashes are optional for externally supplied reports, but matching supplied hashes
 are checked. Precision metrics, targets, references, and sample counts must agree
 across backends. Every backend must be present for every case in a figure group.
-The adapter emits separate figures per group, paginates latency charts at eight
-cases, and writes `figures.json` with a canonical report hash and artifact hashes.
-Regenerate into a fresh directory when changing report groups or formats; the
-manifest lists exactly the files generated by the latest invocation.
+The adapter emits at most three figures per operator/mode, with dtypes combined
+and no per-case pages. Precision must be available for all cases in a summary
+or omitted from all of them. It writes `figures.json` with aggregation semantics,
+a canonical report hash, and artifact hashes. After successful rendering, it
+removes obsolete figures listed in the previous manifest; unrelated files remain. Use a separate output directory to preserve a previous run.
 
-## Adding an operator
+## Adding a benchmark
 
-Add one `benchmarks/<operator>.py` module with a CLI accepting `--output PATH`.
+Add one `benchmarks/<group>/<name>.py` module with a CLI accepting `--output PATH`,
+where `<group>` is `ops`, `layers`, or `modules`. Keep one file per benchmark;
+there are no per-benchmark directories or `__init__.py` files.
 Keep its imports lightweight so the driver can read its declarations before
 initializing CUDA. Declare `TEST_FILES` (the relevant pytest paths) and
 `REQUIRED_TEST_MARKER` (`"cuda"` for current kernels). The driver imports these

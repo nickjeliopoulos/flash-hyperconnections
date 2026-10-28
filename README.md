@@ -71,7 +71,7 @@ operators, tests, benchmarks, plots, and local experiment artifacts.
 python -m pytest -q
 python -m pip install ruff
 ruff check .
-python -m benchmarks.run matrix_exp --output-dir results/matrix-exp-run -- --precision
+python -m benchmarks.run matrix_exp -- --precision
 ```
 
 GPU tests verify dispatch as well as numerical results. Tests use FP64 native
@@ -79,16 +79,21 @@ references and the numerical criteria from the integrated implementation.
 Benchmarks time the direct API, including allocations, conversions, and autograd overhead; compilation
 and warmup are excluded. Results record the hardware and software environment.
 The benchmark driver runs correctness tests before measurements, saves their
-outcome with the report, then generates plots from the saved metadata. Install
+outcome with the report, then generates plots from the saved metadata. Outputs
+default to the ignored `.reports/matrix_exp/` directory, including `report.json`
+and `figures/`. Install
 the `benchmark` extra for plotting. `--precision` adds FP64-reference errors,
-precision CDFs, and precision-versus-speedup plots to the paired latency bars.
-Plot types have separate modules under `benchmarks/`, with shared styling and a
-reusable report interface in `benchmarks/plotting.py`. See the
+precision CDFs, and precision-versus-speedup plots alongside speedup bars.
+Each mode has one figure of each type, combining dtypes and aggregating matrix
+families and workloads. Bar labels include latency; heights show speedup.
+Benchmarks are grouped under `benchmarks/ops/`, `benchmarks/layers/`, and
+`benchmarks/modules/`. All plot types, shared styling, and report visualization
+live in `benchmarks/visualization.py`. See the
 [benchmark guide](benchmarks/README.md) for optional dependencies, input families,
 CPU-only plotting of saved JSON, and the data format for future operators.
 See [VALIDATION.md](VALIDATION.md) for the A100 results, independent installation
 checks, extraction comparison, and remaining H100 and multi-GPU checks.
 
-Python implementations live under `flash_hypercons/ops/matrix_exp/`; CUDA sources
+Python implementations live under `flash_hypercons/ops/matrix_exp.py`; CUDA sources
 live under `csrc/`. Additional implementations can use the same public entry
 points without introducing a backend registry.

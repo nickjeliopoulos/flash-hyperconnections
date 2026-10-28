@@ -8,6 +8,7 @@ dist/
 .ruff_cache/
 .venv/
 results/
+/.reports/
 
 # Local kernel experiments; keep the shared playground location discoverable.
 /.agents/forum/*

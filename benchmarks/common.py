@@ -4,6 +4,8 @@ import json
 import time
 from pathlib import Path
 
+REPORTS_ROOT = Path(__file__).resolve().parents[1] / ".reports"
+
 
 def write_report(path, report):
     """Replace a report only after its complete JSON has been written."""

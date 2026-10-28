@@ -20,7 +20,7 @@ Read applicable `AGENTS.md` and `REVIEW.md` guidance, the README and packaging
 metadata, then the relevant implementation and tests. Fetch remote PR information
 only when a PR is the requested target; do not post a review without authorization.
 
-The key paths are `flash_hypercons/ops/matrix_exp/`, `csrc/`, `tests/`,
+The key paths are `flash_hypercons/ops/matrix_exp.py`, `csrc/`, `tests/`,
 `benchmarks/`, `setup.py`, `pyproject.toml`, and `MANIFEST.in`. Read `VALIDATION.md`
 as historical evidence, verifying environment and code identity before reusing it.
 No sibling PyTorch checkout, upstream review skill, or internal test harness is

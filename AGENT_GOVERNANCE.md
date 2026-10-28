@@ -7,7 +7,9 @@ shared abstractions only when there is a concrete need.
 ## Operator code
 
 - Place Python operator implementations and selection logic under
-  `flash_hypercons/ops/<operator>/` and native sources under `csrc/`.
+  `flash_hypercons/ops/<operator>.py` and native sources under `csrc/`.
+  Keep `ops/` flat: use one module per operator, without per-operator
+  subdirectories or `__init__.py` files.
 - Keep implementation selection private behind the public operator API.
 - Preserve documented PyTorch integration, fallback behavior, and numerical
   guarantees when changing kernels. Keep optional benchmark and plotting
@@ -34,15 +36,23 @@ shared abstractions only when there is a concrete need.
 
 ## Benchmarks and plots
 
-- Use one benchmark entry point per operator, such as
-  `benchmarks/matrix_exp.py`. Keep timing, input selection, and plot orchestration
-  for that operator together.
+- Group benchmarks under `benchmarks/ops/`, `benchmarks/layers/`, and
+  `benchmarks/modules/`. Use one file per measured component, such as
+  `benchmarks/ops/matrix_exp.py`, without per-component subdirectories or
+  `__init__.py` files. Keep timing, input selection, and plot orchestration
+  for that component together.
 - Use `benchmarks/` primarily for performance measurement and plotting. Include
   numerical evaluation when needed to produce precision CDFs or compare
   precision with runtime.
-- Keep each plot type in a separate file. Put shared style and reusable report
-  interfaces in `benchmarks/plotting.py`, so future operators can supply their
+- Keep all plot functions, shared style, and report visualization in the single
+  `benchmarks/visualization.py` module. Ops, layers, and modules supply their
   timing and precision data to the same plotting functions.
+- Keep report visualization compact: one speedup chart per mode, plus a CDF
+  and precision-versus-speedup plot when precision data is present. Combine
+  dtypes in each figure and pool matrix families and workloads. Use geometric
+  means of matched speedups and pooled precision samples, with clear labels.
+  Bar heights represent speedup; latency may appear as an annotation. Preserve
+  detailed case measurements in JSON instead of generating per-case plot pages.
 - Keep shapes, input generation, references, backend callables, and baseline
   semantics in each operator's benchmark. Share timing, environment capture,
   and report writing through small functions once another operator needs them;
@@ -58,8 +68,9 @@ shared abstractions only when there is a concrete need.
 - Validate correctness before accepting an optimization's speedup. Reuse pytest
   for this check; keep assertion logic out of benchmark runners, and do not
   treat an all-skipped GPU test run as successful validation.
-- Use `python -m benchmarks.run <operator>` for the correctness → measurement →
-  saved report → plot workflow. Each operator declares its test files and
+- Use `python -m benchmarks.run <name> --group <ops|layers|modules>` for the
+  correctness → measurement → saved report → plot workflow (`ops` is the
+  default group). Each benchmark declares its test files and
   required device marker. Keep subset validation explicit in report metadata.
 - Keep numerical evaluation focused on relevant inputs. For matrix exponential,
   the current benchmark range extends through a maximum absolute column sum
@@ -70,7 +81,15 @@ shared abstractions only when there is a concrete need.
 ## Local artifacts
 
 - Keep generated measurements and figures in ignored local output directories,
-  such as `results/`. Track reusable scripts and concise validation records.
+  using `.reports/<operator>/report.json` and `.reports/<operator>/figures/` by
+  default for ops; layers and modules use `.reports/<group>/<name>/`.
+  Track reusable scripts and concise validation records.
 - Track reusable skills under `.agents/skills/`. Keep `.agents/forum/.gitkeep`
   as the directory placeholder; use the ignored contents of `.agents/forum/`
   for optional local kernel optimization experiments.
+- Keep significant kernel design decisions and reproducible performance gains
+  in `.agents/forum/<operator-topic>/KERNEL.md`, with links to forum entries and
+  measurement evidence. Keep routine trials in the append-only journal. The
+  `kernel-ptx-match-forum` skill defines bounded kernel search bootstrapped from
+  a DSL/compiler prior (typically Triton/PTX), using the existing `kernel-forum`
+  tooling.
