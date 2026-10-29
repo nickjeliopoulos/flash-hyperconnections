@@ -7,8 +7,14 @@ shared abstractions only when there is a concrete need.
 ## Repository documentation
 
 - Keep governance and validation records in `docs/`.
-- Keep the root `MANIFEST.md` synchronized when tracked files are added, moved,
-  or removed. Stage those path changes, then run its refresh command.
+- Use [LEXICON.md](LEXICON.md) for shared vocabulary. Describe the ordinary
+  additive update as the layer-output contribution, source update, or residual
+  addition; reserve temporal write-back / `TemporalWriteback` for the distinct
+  architecture that constructs temporal components.
+- Keep [MANIFEST.md](MANIFEST.md) in `docs/` synchronized with Git's index and
+  give every tracked path a concrete purpose. List untracked additions separately
+  until they enter the index, and list submodules once. Run its read-only coverage
+  check after updating the inventory. Keep the full inventory in this document.
 - Paths in these documents are relative to the repository root unless stated
   otherwise.
 

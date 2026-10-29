@@ -77,6 +77,7 @@ local ignored artifacts; no generated figures or data need to be committed.
 benchmarks/
   ops/matrix_exp.py
   ops/stream_mix.py
+  ops/expm_stream_mix.py
   layers/                 # layer benchmarks as they are added
   modules/                # module benchmarks as they are added
   run.py                  # shared correctness → timing → report → plots driver
@@ -92,6 +93,22 @@ report's `benchmark` metadata records its group and name; the existing per-row
 `operator` field holds the measured component's name for all three groups.
 
 ## Measurements and interpretation
+
+The N=4 exp/project/impulse forward fusion uses:
+
+```bash
+python -m benchmarks.run expm_stream_mix -- --wall
+```
+
+Defaults cover B=256…24,576 and D=768 with FP32/BF16 residuals and BF16
+transition/source boundaries. Baselines compose the existing CUDA exp and
+stream-mixing operators, either eagerly or with static-shape `torch.compile`
+for the intervening casts and rank-one source. Compilation uses
+`emulate_precision_casts=True` to preserve BF16 operand rounding. Graph times
+include casts and intermediate/output memory traffic but exclude host dispatch
+and allocation overhead; optional wall times include public-wrapper overhead.
+Both run under `no_grad`, exclude
+generator construction and the module, and make no backward or full-model claim.
 
 Projected stream mixing uses the same driver:
 

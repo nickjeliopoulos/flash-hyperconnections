@@ -44,5 +44,14 @@
       }
     },
     "implementation": "Independent CUDA C++ implementation of the projected mixing equations. v3 row/D tiling is the initial compiler prior; master defines decay, mixed dtypes and caller composition. Subsequent measured optimization uses vectorized forward loads, fused input gradients, and shared G*X^T parameter contractions: CUTLASS SIMT for FP32 and WMMA for already-stored FP16/BF16 operands with FP32 accumulation. Existing FP32 coefficients/intermediates are never reduced to TF32. No model implementation is copied into runtime code."
+  },
+  "expm_stream_mix": {
+    "semantic_authority": "stream_mix.semantic_authority; continuous-hc master CGHC, m=1, one-sided projection with impulse forcing",
+    "config_files": {
+      "configs/vision/ade20k/cghc_base.yaml": "de3974c1e1514295ff2d1d946d26509219739b48561d416ffc124145abd3c18d",
+      "src/continuous_hc/models/vision/hc_vit.py": "f7d6edb7d2eb60fed7a60d545f781c2fc5c6c106656f93a27f9a4e158592c80e",
+      "src/continuous_hc/cli/train_seg.py": "69cd2b2120c7ed91bb48d7ad6233871de731eebc7dca52db49ce615806e117b6"
+    },
+    "implementation": "N4 CUDA forward reuses MatrixExpSmall.cuh adaptive t18, then shared-memory Phi and register-local rank-one source. Preserves explicit transition and source operand/result casts. Supplied mean/V direction; A already contains dt. No integral computation, model copy, or new backward kernel. Gradient-enabled calls use existing unfused operators."
   }
 }

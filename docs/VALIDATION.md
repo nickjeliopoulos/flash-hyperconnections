@@ -350,3 +350,93 @@ the final wheel extension is
 `04ae4010007367605e4c197fd6da067fa2a71bf1ce5fdc4f775d38e59dd5f719`.
 The four-candidate optimization batch is complete. N16/32 forward execution,
 additional feature widths and H100 execution remain useful future measurements.
+
+## N=4 exp/project/impulse forward fusion (2026-10-28)
+
+Added `matrix_exp_stream_mix_project` in `flash_hypercons/ops/expm_stream_mix.py`, backed by
+`csrc/expm_stream_mix.cu`. This fuses the adaptive small matrix exponential,
+one-sided projected mixing, and the rank-one impulse source for N=4. Phi stays
+in shared memory; the source is formed in registers. It preserves explicit
+transition and impulse operand/result rounding, accepts the supplied perturbed
+mean/V direction, and expects A to contain dt already. The precision contract
+follows the CGHC m=1 path in the recorded master branches; no integral is computed.
+No sibling model/layer code was changed.
+
+This is a **forward-only optimization**. With autograd enabled and any input
+requiring a gradient, the public function uses the existing differentiable
+unfused operators. CPU, other N, FP64 and function transforms also use that
+composition. There is no fused backward or training/full-model throughput claim.
+
+Three launch layouts were evaluated on the allocated A100 80GB PCIe SM80 with
+stock PyTorch 2.14.1+cu130, Python 3.12, and CUDA toolkit 13.1.80. The selected
+kernel uses 128 threads per item generally, and 64 for BF16 residuals with
+B>=8192 and D=768. Four items per block did not consistently improve on two and
+hurt small batches. The selected vector paths use **56 registers/thread**, no
+stack/local memory or register spills, and 128/256 bytes of shared memory on
+SM80. Resource usage was checked in the final wheel, not only a trial build.
+
+The full benchmark covers B=256,512,1024,2048,4096,8192,16384,21920,24576 at D=768,
+with FP32 or BF16 residuals; A/W/Z/V are FP32 and transition/source rounding is
+BF16. Synthetic generators are bounded skew matrices plus a negative diagonal;
+V is a shared, normalized, perturbed mean. The baseline composes the existing
+CUDA exp/mix operators with statically compiled intervening casts/source,
+using `emulate_precision_casts=True`. Default Inductor can remove BF16 operand
+rounding. An initial dynamic-shape compiled baseline was also slower because of
+runtime integer division; it is preserved but excluded from the final comparison.
+
+Representative CUDA graph replay latencies, in microseconds:
+
+| B | Residual | Unfused compiled | Fused | Speedup |
+|---:|:---|---:|---:|---:|
+| 256 | FP32 | 17.050 | 5.530 | 3.08× |
+| 256 | BF16 | 16.230 | 5.202 | 3.12× |
+| 16,384 | FP32 | 443.351 | 278.354 | 1.59× |
+| 16,384 | BF16 | 331.694 | 160.963 | 2.06× |
+| 21,920 | FP32 | 587.377 | 369.920 | 1.59× |
+| 21,920 | BF16 | 439.101 | 211.876 | 2.07× |
+| 24,576 | FP32 | 655.708 | 413.573 | 1.59× |
+| 24,576 | BF16 | 489.810 | 236.329 | 2.07× |
+
+All 18 primary cases improved. Geometric mean graph speedups are **1.94× FP32**
+and **2.38× BF16**; the respective ranges are 1.59–3.08× and 2.06–3.14×.
+Measurements use ten warmups, ten captured calls replayed ten times per trial,
+and seven event-timed trials with alternating backend order. They include the
+GPU work of public calls, including conversions and intermediate/output memory
+traffic; host dispatch and allocation overhead are excluded. Separate
+synchronized public-call wall measurements include those host costs and also
+improved every case: geometric means 2.45× FP32 and 2.90× BF16 on this host.
+The generator, readout/module and backward are outside both timing scopes.
+Additional D=256/2048 holdouts at B=256/8192 improved 1.51–3.67× versus the same
+compiled baseline, using the general layout.
+
+The final-wheel correctness gate passed **71 operator tests**. Coverage includes
+all residual/mixing precision pairs, the BF16 cast boundaries, independent dense
+FP64 exp/projector references, adaptive scaling/squaring, nonfinite isolation,
+shared and nonunit directions, decay, noncontiguous/unaligned/negative inputs,
+empty tensors, large batches, and odd batches around the dispatch boundary.
+Five mixed-coefficient layout cases were also rerun with independent FP16/BF16
+A/W/Z/V inputs against the final extension. Opcheck, dynamic fullgraph
+compilation, changed-input graph replay on a
+nondefault stream, forward AD, eager/compiled gradient fallback, and CPU FP64
+first/second derivative checks passed. Tolerances were unchanged: normalized
+per-batch forward error 2e-5 FP32, 2e-3 FP16 and 1e-2 BF16.
+
+The existing suite passed **749 tests with two multi-GPU skips**, for **820
+passes and two skips** total. Existing JIT-deprecation and AccumulateGrad stream
+warnings remain; graph correctness checks passed. Ruff and whitespace checks
+passed. An independent wheel built from the source archive for SM80 and
+SM90+PTX passed six forward and three gradient-fallback cases with Triton and
+both sibling packages blocked. Runtime validation is A100 only; H100 was
+cross-compiled, not executed.
+
+Reproduce with `python -m benchmarks.run expm_stream_mix -- --wall`. Raw evidence
+is under `.agents/forum/expm-stream-mix-n4/`: `KERNEL.md`, trial snapshots,
+`final-pipeline/` (108 timing rows and four inspected PNG/SVG exports),
+`final-summary.json`, `holdouts.json`, `regression.log`, and `package/`.
+Source, archive, wheel, imported extension, report and figure identities were
+verified. Selected CUDA SHA256:
+`4241f0d1aa99447d8e42c222109acb9e77c5c9dabb9bb49e833a7678307f1526`.
+Final wheel extension SHA256:
+`1ad6bebc6ef213eeecdcaa1bc1343084577de218cca38f21ac85340d782d2a9e`.
+The three-candidate campaign is complete; backward fusion and model integration
+remain separate future work.

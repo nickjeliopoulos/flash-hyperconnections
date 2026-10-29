@@ -32,3 +32,34 @@ def measure(backends, call, synchronize, *, warmup, repeat, trials):
             synchronize()
             samples[name].append((time.perf_counter() - start) * 1000 / repeat)
     return samples
+
+
+def measure_graph(backends, call, *, warmup, repeat, trials, replay=10):
+    """CUDA-event milliseconds/call; capture public calls, excluding CPU dispatch."""
+    import torch
+
+    graphs = {}
+    outputs = {}
+    for name, fn in backends.items():
+        for _ in range(warmup):
+            call(fn)
+        torch.cuda.synchronize()
+        graph = torch.cuda.CUDAGraph()
+        with torch.cuda.graph(graph):
+            for _ in range(repeat):
+                outputs[name] = call(fn)
+        graphs[name] = graph
+        graph.replay()
+    torch.cuda.synchronize()
+    samples = {name: [] for name in backends}
+    names = list(backends)
+    for trial in range(trials):
+        for name in names if trial % 2 == 0 else reversed(names):
+            start, end = torch.cuda.Event(enable_timing=True), torch.cuda.Event(enable_timing=True)
+            start.record()
+            for _ in range(replay):
+                graphs[name].replay()
+            end.record()
+            end.synchronize()
+            samples[name].append(start.elapsed_time(end) / (repeat * replay))
+    return samples

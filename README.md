@@ -107,11 +107,62 @@ dispatcher beside its sibling kernels. Reports include source/extension
 identities and identical input and upstream-gradient hashes. Measured performance
 and validation coverage are recorded in [docs/VALIDATION.md](docs/VALIDATION.md).
 
+## Fused N=4 forward with impulse forcing
+
+```python
+from flash_hypercons import matrix_exp_stream_mix_project
+
+# a: [B,4,4], x: [B,4,D], w: [B,4], z (layer_output): [B,D], v: [1,4] or [B,4]
+# a already contains dt. v is supplied and normalized by the caller.
+with torch.no_grad():
+    out = matrix_exp_stream_mix_project(a, x, w, z, v, mixing_dtype=torch.bfloat16)
+```
+
+This computes `Phi = exp(a.float())`, rounds it to `mixing_dtype`, and returns
+the projected mixing formula above with the impulse `y = w ⊗ z`. Both impulse
+operands and their product round to `mixing_dtype`; mixing accumulates in FP32
+and returns x's dtype. The explicit precision policy is independent of the
+surrounding autocast context. `mixing_dtype` defaults to FP32; BF16 matches the
+transition/source boundaries of the mixed-precision CGHC configuration.
+The supplied direction can be uniform or perturbed; it is never hardcoded.
+`projection_decay` remains a scalar in [0,1]. No integral forcing is computed.
+Here `z` is the layer output and `w ⊗ z` is its additive contribution to the
+residual streams. The LM `TemporalWriteback` architecture, which constructs
+multiple temporal components, is a separate operation outside this kernel.
+
+The fused NVIDIA CUDA path supports N=4 and independently FP32/FP16/BF16 inputs.
+It keeps Phi in shared memory and forms the impulse in registers, avoiding both
+global intermediates. It uses the existing adaptive exponential, including
+scaling and squaring for larger generators. Coefficients and layer output are
+prepared as contiguous FP32; x retains its dtype. Shared v avoids a per-batch
+copy. Empty and noncontiguous inputs are supported.
+
+**This is a forward-only optimization.** When autograd is enabled and any input
+requires a gradient, the public API uses the existing differentiable unfused
+operators. CPU, other N, FP64, and function transforms also use that composition;
+FP64 a uses FP64 exponential arithmetic. No training speedup or fused backward
+is claimed. Model/layer integration remains in the calling packages.
+
+```bash
+python -m benchmarks.run expm_stream_mix -- --wall
+```
+
+The default sweep covers B=256…24,576, D=768, FP32/BF16 residuals, and BF16
+transition/source rounding. It compares the existing eager and compiled CUDA-op
+composition with fusion. Graph replay times include casts and intermediate/output
+memory traffic, excluding host dispatch and allocation overhead; `--wall`
+additionally reports public-call wall time with those host costs.
+The compiled baseline enables `emulate_precision_casts` to retain BF16 operand
+rounding. See [validation results](docs/VALIDATION.md) for measured scope.
+
 ## Development and Testing
 
 See [AGENT_GOVERNANCE.md](docs/AGENT_GOVERNANCE.md) for repository conventions covering
 operators, tests, benchmarks, plots, and local experiment artifacts.
-See [MANIFEST.md](MANIFEST.md) for the Git-tracked file inventory and refresh command.
+See [LEXICON.md](docs/LEXICON.md) for shared terminology, including the distinction
+between residual addition and the temporal write-back architecture.
+See [MANIFEST.md](docs/MANIFEST.md) for every Git-tracked file's purpose and the inventory
+coverage check.
 
 ```bash
 python -m pytest -q
