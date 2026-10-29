@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "flash-hypercons"
 version = "0.1.0"
-description = "Small batched CUDA matrix exponentials for PyTorch"
+description = "CUDA matrix exponentials and projected stream mixing for PyTorch"
 readme = "README.md"
 requires-python = ">=3.10"
 license = {file = "LICENSE"}

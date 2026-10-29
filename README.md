@@ -62,10 +62,56 @@ with fh.use_backend():
     y = compiled(x)
 ```
 
+## Projected stream mixing
+
+```python
+from flash_hypercons.ops.stream_mix import stream_mix_project
+
+# phi: [B,N,N], x/y: [B,N,D], v: [B,N], normalized by the caller
+out = stream_mix_project(phi, x, y, v, projection_decay=0.99)
+```
+
+This computes `phi @ x + (projection_decay*v - phi @ v) (v.T @ x) + y`,
+independently for each batch item. `projection_decay` defaults to 1 and must
+lie in [0,1]. A uniform `v = 1/sqrt(N)` selects the stream mean. Shared
+directions must be explicitly expanded to `[B,N]`; the operator does not
+normalize `v` or broadcast inputs.
+
+The contract follows `hyperconnections/master` and the residual storage used
+by `continuous-hc/master`. All four inputs may independently be FP32, FP16,
+or BF16, on the same device; the result retains **x's dtype**. Computation
+accumulates in FP32 and casts only the result, including when `y` has a
+different dtype. CUDA forward and first backward accelerate N=1…32, including
+noncontiguous/expanded inputs and empty batch or feature dimensions. Gradients
+for `phi`, `x`, `y`, and `v` retain their respective input dtypes. CPU, FP64,
+larger N, and function transforms use differentiable PyTorch operations; higher
+derivatives use differentiable backward formulas. Triton is not a dependency.
+
+The primitive accepts an already prepared transition and source. For the
+two-sided variant, the caller supplies `(I-vv.T) @ phi`. Forced CGHC supplies
+its already transformed source as `y`, which is added unchanged. The inflow
+and generator variants in `hyperconnections` prepare a complete transition
+and use **unprojected** mixing; this projected API must not be substituted at
+those call sites. Model/layer integration remains in the calling packages.
+
+Run its correctness, measurement, and plotting workflow with:
+
+```bash
+python -m benchmarks.run stream_mix -- --n 4 8 16 32 --batch 128 512 2048 8192 16384 --d 768
+```
+
+The benchmark optionally accepts `--triton-source /path/to/ops/stream_mix.py`
+for the local master dispatcher, `--compiled` for a compiled PyTorch reference,
+and `--mixed --decay .99` for mixed residual/source dtypes and decay. Keep the
+dispatcher beside its sibling kernels. Reports include source/extension
+identities and identical input and upstream-gradient hashes. Measured performance
+and validation coverage are recorded in [docs/VALIDATION.md](docs/VALIDATION.md).
+
 ## Development and Testing
 
-See [AGENT_GOVERNANCE.md](AGENT_GOVERNANCE.md) for repository conventions covering
+See [AGENT_GOVERNANCE.md](docs/AGENT_GOVERNANCE.md) for repository conventions covering
 operators, tests, benchmarks, plots, and local experiment artifacts.
+See [MANIFEST.md](MANIFEST.md) for the Git-tracked file inventory and refresh command.
 
 ```bash
 python -m pytest -q
@@ -76,6 +122,10 @@ python -m benchmarks.run matrix_exp -- --precision
 
 GPU tests verify dispatch as well as numerical results. Tests use FP64 native
 references and the numerical criteria from the integrated implementation.
+Shared numerical helpers live in `flash_hypercons.testing`: `absolute_error`,
+`error_ratio`, and `assert_close`. The ratio is maximum absolute error divided
+by `1 + max(abs(expected))`; pass `dim=(-2, -1)` to compare each matrix separately.
+The assertion takes an explicit `tolerance` on that ratio.
 Benchmarks time the direct API, including allocations, conversions, and autograd overhead; compilation
 and warmup are excluded. Results record the hardware and software environment.
 The benchmark driver runs correctness tests before measurements, saves their
@@ -91,7 +141,7 @@ Benchmarks are grouped under `benchmarks/ops/`, `benchmarks/layers/`, and
 live in `benchmarks/visualization.py`. See the
 [benchmark guide](benchmarks/README.md) for optional dependencies, input families,
 CPU-only plotting of saved JSON, and the data format for future operators.
-See [VALIDATION.md](VALIDATION.md) for the A100 results, independent installation
+See [VALIDATION.md](docs/VALIDATION.md) for the A100 results, independent installation
 checks, extraction comparison, and remaining H100 and multi-GPU checks.
 
 Python implementations live under `flash_hypercons/ops/matrix_exp.py`; CUDA sources

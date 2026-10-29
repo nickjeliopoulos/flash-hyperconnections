@@ -76,6 +76,7 @@ local ignored artifacts; no generated figures or data need to be committed.
 ```text
 benchmarks/
   ops/matrix_exp.py
+  ops/stream_mix.py
   layers/                 # layer benchmarks as they are added
   modules/                # module benchmarks as they are added
   run.py                  # shared correctness → timing → report → plots driver
@@ -91,6 +92,39 @@ report's `benchmark` metadata records its group and name; the existing per-row
 `operator` field holds the measured component's name for all three groups.
 
 ## Measurements and interpretation
+
+Projected stream mixing uses the same driver:
+
+```bash
+python -m benchmarks.run stream_mix -- \
+  --n 4 8 16 32 --batch 128 512 2048 8192 16384 --d 768 --dtype fp32 bf16 --mixed --decay .99
+```
+
+Its gate runs `tests/test_stream_mix.py`. Optional `--triton-source PATH` loads
+an existing small/big Triton kernel or `stream_mix.py` dispatcher without
+importing its parent model package. Prefer the master dispatcher for comparisons
+across batch sizes; keep its sibling kernel files and `numbers.py` beside it.
+The report records dispatcher dependencies and source hashes. Use the master
+version for nondefault decay. `--mixed` selects
+FP32 transition/direction tensors, BF16 sources, and the requested residual
+dtype. Timings include all four input gradients in forward + backward. This
+benchmark emits timing data; the numerical precision options below belong to
+matrix-exp. Stream-mixing accuracy is checked against an independent FP64
+projector in its pytest suite.
+
+`--compiled` adds `torch.compile(..., fullgraph=True)` of the same FP32-promoted
+formula. Compilation and autotuning occur during warmup, outside measurements.
+Reports record CPU affinity and PyTorch thread count; keep these settings fixed
+when comparing separate builds. Triton precision is defined by the supplied
+source: the master big-NB backward can enable TF32 for low-precision residuals,
+even though the PyTorch reference and CUDA implementation preserve FP32
+coefficients and intermediates.
+
+The captured master revision `cf600d9f3f4a` fails in big-NB backward when `v`
+is FP32 and `x` is BF16 because an `einsum` receives different operand dtypes.
+The benchmark reports this failure; omit the optional reference to measure the
+full mixed-dtype grid supported by this package. See `docs/VALIDATION.md` for
+the tested reference scope.
 
 The baseline is **native PyTorch from the installed build**. Use stock PyTorch for
 published comparisons and check the recorded version/build. FP16/BF16 baseline
@@ -118,6 +152,11 @@ The metric matches the numerical test suite: per-matrix normalized maximum error
 ```text
 max(abs(actual - reference)) / (1 + max(abs(reference)))
 ```
+
+Tests and benchmark evaluation share `flash_hypercons.testing.error_ratio`,
+using `dim=(-2, -1)` for per-matrix reductions and detached FP64 arithmetic.
+The same module supplies maximum absolute error and an assertion on the ratio;
+operator-specific tolerances stay in the tests.
 
 A zero reference uses absolute maximum error. Nonfinite outputs, references,
 and errors are recorded as JSON `null` with separate status counts. CDFs retain

@@ -21,7 +21,7 @@ metadata, then the relevant implementation and tests. Fetch remote PR informatio
 only when a PR is the requested target; do not post a review without authorization.
 
 The key paths are `flash_hypercons/ops/matrix_exp.py`, `csrc/`, `tests/`,
-`benchmarks/`, `setup.py`, `pyproject.toml`, and `MANIFEST.in`. Read `VALIDATION.md`
+`benchmarks/`, `setup.py`, `pyproject.toml`, and `MANIFEST.in`. Read `docs/VALIDATION.md`
 as historical evidence, verifying environment and code identity before reusing it.
 No sibling PyTorch checkout, upstream review skill, or internal test harness is
 required to apply this skill.

@@ -7,5 +7,42 @@
     "aten/src/ATen/native/cuda/MatrixExpSmall.cuh": "25d2770737c15f41ac4b1055cbd5ccfe10a264e23197031e4b9ac02d44fb999d"
   },
   "cutlass_commit": "098de2a652cf8f00fd70b2df54051c7eccbb855a",
-  "adaptation": "Package namespaces, standalone input checks, and extension entry points. Device arithmetic and launch choices retained."
+  "adaptation": "Package namespaces, standalone input checks, and extension entry points. Device arithmetic and launch choices retained.",
+  "stream_mix": {
+    "compiler_prior": {
+      "repository": "https://github.com/pjjajal/hyperconnections",
+      "revision": "9dd5d6062db63452c3c608ffee00cb33b09b0ba4",
+      "branch": "origin/expm-stream-kernel-v3",
+      "files": {
+        "hyperconnections/ops/stream_mix_small_nb.py": "6710f8d35ecefc8cb499b35bad818c739d87c534f02bfd4e2adb815d86152f83",
+        "hyperconnections/ops/stream_mix_big_nb.py": "67ecade7a7f952f7c61180caab8daffcdb78e5fab09d21d1b06f3be4004f1e0b",
+        "hyperconnections/ops/stream_mix.py": "a2150c1afef6c37a0ead14f7974f99430a653f1a01ad87647b5a796736a527a4",
+        "hyperconnections/ops/numbers.py": "59da7c4ad23234211818c909cfba1893433226ab48cb77e884b795dab57fc300"
+      },
+      "license_note": "No license file present in the source revision. Local compiler seed retained for this user-requested translation; CUDA implementation written independently from the operator equations and execution strategy."
+    },
+    "semantic_authority": {
+      "hyperconnections": {
+        "revision": "cf600d9f3f4aa97b8a88a8356568f87053d800db",
+        "files": {
+          "hyperconnections/cghc.py": "b17756cfe1fada6678579f42a97b58030d07f115ee9cc79449adc678764b8bf8",
+          "hyperconnections/cghcf.py": "d13a8f3c891a9de36e453b79942a5d0c0e4b2c9580a3352954b87f161ec038b3",
+          "hyperconnections/ops/stream_mix_small_nb.py": "f59769c3517ed1a2495242cbc1262e3be84a076625c83da5c69a8bbb2050dd65",
+          "hyperconnections/ops/stream_mix_big_nb.py": "4aceb700ee35d94198e359f9d1af58b185af4715a8a83b3861a3f99d42fad1d6",
+          "hyperconnections/ops/stream_mix.py": "43c6039c782ee645df2c44a157ef5b5381893947615d977088d3fcd43c6c0e29",
+          "hyperconnections/ops/numbers.py": "59da7c4ad23234211818c909cfba1893433226ab48cb77e884b795dab57fc300",
+          "tests/test_projection_decay.py": "8661989c9a9675439f0c83e11074a9ec6366a41756532d2f7f1cdef6068a180e"
+        }
+      },
+      "continuous-hc": {
+        "revision": "41ca9ae0673550008e5fc88822dd5ff657db1bd4",
+        "files": {
+          "src/continuous_hc/models/lm/block.py": "65143401a15bebbae90d86dcf336bec87ad85905d079bb6bfcfc27504828b8cd",
+          "src/continuous_hc/models/lm/model.py": "72719a4eaf73e14f015987f63a7a93371af989f179c3f62e969ccbde490340d0",
+          "pyproject.toml": "0bcdbef17dbc6f284cf6af284265470f5e94e4e4a211d11cc4b6b7d4410527c8"
+        }
+      }
+    },
+    "implementation": "Independent CUDA C++ implementation of the projected mixing equations. v3 row/D tiling is the initial compiler prior; master defines decay, mixed dtypes and caller composition. Subsequent measured optimization uses vectorized forward loads, fused input gradients, and shared G*X^T parameter contractions: CUTLASS SIMT for FP32 and WMMA for already-stored FP16/BF16 operands with FP32 accumulation. Existing FP32 coefficients/intermediates are never reduced to TF32. No model implementation is copied into runtime code."
+  }
 }

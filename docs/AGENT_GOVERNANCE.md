@@ -4,6 +4,14 @@ Keep `flash-hypercons` lean and organized around individual operators. Extend
 the existing structure when adding an operator or implementation; introduce
 shared abstractions only when there is a concrete need.
 
+## Repository documentation
+
+- Keep governance and validation records in `docs/`.
+- Keep the root `MANIFEST.md` synchronized when tracked files are added, moved,
+  or removed. Stage those path changes, then run its refresh command.
+- Paths in these documents are relative to the repository root unless stated
+  otherwise.
+
 ## Operator code
 
 - Place Python operator implementations and selection logic under
@@ -25,6 +33,10 @@ shared abstractions only when there is a concrete need.
 - Keep reference calculations, input cases, and tolerances specific to each
   operator. Share fixtures and small assertion helpers where their semantics
   agree; different operators need not use the same error metric or tolerance.
+- Reuse `flash_hypercons/testing.py` for maximum absolute error, normalized
+  maximum error, and assertions on that metric in both tests and benchmarks.
+  Choose reduction dimensions explicitly for batched comparisons; matrix-exp
+  uses `dim=(-2, -1)` so each matrix is checked independently.
 - Extend existing parametrized tests with targeted cases before adding new test
   functions. As the suite grows, select a small smoke subset with pytest markers
   while retaining broader checks for full validation.

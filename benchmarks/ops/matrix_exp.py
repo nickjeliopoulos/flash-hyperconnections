@@ -52,10 +52,11 @@ def make_inputs(batch, n, dtype, family, norm, seed, *, device="cuda"):
 
 def normalized_errors(actual, expected):
     """Per-matrix normalized maximum errors, matching the numerical test suite."""
+    from flash_hypercons.testing import error_ratio
 
-    actual, expected = actual.detach().double().flatten(1), expected.detach().double().flatten(1)
-    actual_ok, expected_ok = actual.isfinite().all(1), expected.isfinite().all(1)
-    error = (actual - expected).abs().amax(1) / (1 + expected.abs().amax(1))
+    error = error_ratio(actual, expected, dim=(-2, -1))
+    actual_ok = actual.isfinite().flatten(1).all(1)
+    expected_ok = expected.isfinite().flatten(1).all(1)
     valid = actual_ok & expected_ok & error.isfinite()
     errors = [e if ok else None for e, ok in zip(error.cpu().tolist(), valid.cpu().tolist(), strict=True)]
     counts = {
