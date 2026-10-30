@@ -107,15 +107,15 @@ dispatcher beside its sibling kernels. Reports include source/extension
 identities and identical input and upstream-gradient hashes. Measured performance
 and validation coverage are recorded in [docs/VALIDATION.md](docs/VALIDATION.md).
 
-## Fused N=4 forward with impulse forcing
+## Exponential and mixing with impulse forcing
 
 ```python
 from flash_hypercons import matrix_exp_stream_mix_project
 
-# a: [B,4,4], x: [B,4,D], w: [B,4], z (layer_output): [B,D], v: [1,4] or [B,4]
+# a: [B,N,N], x: [B,N,D], w: [B,N], z (layer_output): [B,D], v: [1,N] or [B,N]
 # a already contains dt. v is supplied and normalized by the caller.
-with torch.no_grad():
-    out = matrix_exp_stream_mix_project(a, x, w, z, v, mixing_dtype=torch.bfloat16)
+out = matrix_exp_stream_mix_project(a, x, w, z, v, mixing_dtype=torch.bfloat16)
+# Ordinary autograd computes gradients for any of a, x, w, z, v that require them.
 ```
 
 This computes `Phi = exp(a.float())`, rounds it to `mixing_dtype`, and returns
@@ -130,30 +130,47 @@ Here `z` is the layer output and `w ⊗ z` is its additive contribution to the
 residual streams. The LM `TemporalWriteback` architecture, which constructs
 multiple temporal components, is a separate operation outside this kernel.
 
-The fused NVIDIA CUDA path supports N=4 and independently FP32/FP16/BF16 inputs.
-It keeps Phi in shared memory and forms the impulse in registers, avoiding both
-global intermediates. It uses the existing adaptive exponential, including
-scaling and squaring for larger generators. Coefficients and layer output are
-prepared as contiguous FP32; x retains its dtype. Shared v avoids a per-batch
-copy. Empty and noncontiguous inputs are supported.
+The public helper composes the separate `matrix_exp` and `stream_mix_project`
+operators for every dtype, in both inference and training. Their CUDA kernels
+support N=2…32 with independently FP32/FP16/BF16 inputs; unsupported domains retain
+their existing fallbacks. FP64 a uses FP64 exponential arithmetic. Autograd,
+higher derivatives, empty inputs and noncontiguous layouts remain supported.
 
-**This is a forward-only optimization.** When autograd is enabled and any input
-requires a gradient, the public API uses the existing differentiable unfused
-operators. CPU, other N, FP64, and function transforms also use that composition;
-FP64 a uses FP64 exponential arithmetic. No training speedup or fused backward
-is claimed. Model/layer integration remains in the calling packages.
+The experimental fused implementation in `csrc/expm_stream_mix.cu` is
+**deprecated**. Its source is retained for reference, excluded from the extension
+build, and has no registered operators. The public helper keeps its existing
+signature and does not compile implicitly. To compile the composition:
+
+```python
+compiled_mix = torch.compile(
+    matrix_exp_stream_mix_project,
+    fullgraph=True,
+    options={"emulate_precision_casts": True},
+)
+out = compiled_mix(a, x, w, z, v, mixing_dtype=torch.bfloat16)
+```
+
+The precision option preserves explicit low-precision rounding boundaries.
+Compilation can optimize the casts, rank-one source and backward reductions
+around the separate custom operators. CUDA graph replay is a separate option;
+the benchmark below captures and replays every backend explicitly.
 
 ```bash
 python -m benchmarks.run expm_stream_mix -- --wall
+python -m benchmarks.run expm_stream_mix -- --backward --wall
 ```
 
-The default sweep covers B=256…24,576, D=768, FP32/BF16 residuals, and BF16
-transition/source rounding. It compares the existing eager and compiled CUDA-op
-composition with fusion. Graph replay times include casts and intermediate/output
-memory traffic, excluding host dispatch and allocation overhead; `--wall`
-additionally reports public-call wall time with those host costs.
-The compiled baseline enables `emulate_precision_casts` to retain BF16 operand
-rounding. See [validation results](docs/VALIDATION.md) for measured scope.
+The default sweep covers N=4/8/16/32, B=256…24,576, D=768, FP32/BF16 residuals,
+and BF16 transition/source rounding. `current-op` measures the public eager
+composition alongside the direct eager and compiled compositions. Graph replay
+times include casts and intermediate/output memory traffic; `--wall` also
+includes host dispatch and allocation costs.
+
+[Historical fusion measurements](docs/VALIDATION.md#expprojectimpulse-backward-through-n32-2026-10-29)
+remain available. Fusion won at N=4/8/16 on the primary training grid, while
+compiled composition was competitive or faster at N=32. Deprecation is a choice
+to simplify the implementation, not a claim that compilation wins every shape.
+Those historical fused timings do not describe the current public helper.
 
 ## Development and Testing
 

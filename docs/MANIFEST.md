@@ -29,37 +29,42 @@ repository and terminology conventions.
 | `.gitmodules` | Declares the NVIDIA CUTLASS submodule path and upstream repository. |
 | `LICENSE` | States the project copyright and MIT license terms. |
 | `MANIFEST.in` | Selects documentation, CUDA sources, tests, benchmarks, and vendored headers for source distributions. |
-| `MANIFEST.md` | Removed from the working tree; relocated to `docs/MANIFEST.md`, pending an index update. |
 | `README.md` | Introduces installation, public operator contracts, usage, and development workflows. |
 | `benchmarks/README.md` | Documents benchmark invocation, correctness gates, measurement scope, saved reports, and plots. |
 | `benchmarks/__init__.py` | Marks the source-tree benchmark utilities as a Python package. |
 | `benchmarks/common.py` | Shares synchronized wall timing, CUDA graph replay timing, and atomic JSON report writing. |
 | `benchmarks/layers/.gitkeep` | Reserves the benchmark directory for future layer measurements. |
 | `benchmarks/modules/.gitkeep` | Reserves the benchmark directory for future module measurements. |
+| `benchmarks/ops/expm_stream_mix.py` | Benchmarks exp/project/impulse forward and forward-plus-backward at N=4/8/16/32, recording dispatch, input/gradient hashes, and eager/compiled baselines. |
 | `benchmarks/ops/matrix_exp.py` | Generates matrix-exp workloads and measures operator timing and optional numerical precision. |
 | `benchmarks/ops/stream_mix.py` | Benchmarks projected stream mixing, including optional compiled and local Triton comparisons. |
 | `benchmarks/pytest_gate.py` | Records pytest correctness evidence and requires actual execution of the requested device tests. |
 | `benchmarks/run.py` | Runs the correctness-to-measurement-to-plot pipeline for ops, layers, and modules. |
 | `benchmarks/visualization.py` | Validates matched reports and renders shared speedup, error-CDF, and precision/speedup figures. |
 | `csrc/MatrixExpSmall.cuh` | Implements device-side small-matrix exponential and paired Fréchet arithmetic and launch templates. |
+| `csrc/expm_stream_mix.cu` | Retains the deprecated experimental exp/project/impulse CUDA forward/backward source for reference; excluded from the build and operator registration. |
 | `csrc/matrix_exp.cu` | Prepares CUDA matrix-exp/Fréchet inputs, selects kernels, and exposes extension entry points. |
 | `csrc/register.cpp` | Registers namespaced custom-op schemas, CUDA implementations, and the native extension module. |
-| `csrc/stream_mix.cu` | Implements projected stream-mixing CUDA forward and backward kernels and their dispatch. |
+| `csrc/stream_mix.cu` | Implements projected stream-mixing CUDA forward/backward and shares its cross-moment contraction with exp/mix backward. |
 | `docs/AGENT_GOVERNANCE.md` | Defines repository conventions for terminology, operator code, tests, benchmarks, and experiment records. |
+| `docs/LEXICON.md` | Defines shared vocabulary, symbols, measurement terms, and the residual-addition/temporal-write-back distinction. |
+| `docs/MANIFEST.md` | Provides the canonical Git-index inventory, a purpose for each path, and a coverage check. |
 | `docs/VALIDATION.md` | Records measured correctness, performance, build provenance, and remaining validation limits. |
 | `flash_hypercons/__init__.py` | Exports the package version and public operator entry points. |
 | `flash_hypercons/ops/__init__.py` | Marks the flat operator implementation directory as a Python package. |
+| `flash_hypercons/ops/expm_stream_mix.py` | Provides the exp/project/impulse API and explicit precision policy by composing the standalone matrix-exp and stream-mixing operators for every dtype. |
 | `flash_hypercons/ops/matrix_exp.py` | Provides matrix-exp routing, fake/autograd registration, native fallbacks, and the scoped backend context. |
 | `flash_hypercons/ops/stream_mix.py` | Provides the projected mixing API, reference formulas, validation, fake/autograd registration, and fallbacks. |
 | `flash_hypercons/testing.py` | Shares absolute/normalized maximum-error calculations and assertions with explicit reduction dimensions. |
 | `provenance.json` | Records source revisions, source hashes, semantic references, dependencies, and implementation origins. |
 | `pyproject.toml` | Declares build metadata, package dependencies and extras, and pytest/Ruff configuration. |
-| `setup.py` | Builds the PyTorch CUDA extension using the packaged sources and CUTLASS headers. |
+| `setup.py` | Builds the active matrix-exp and stream-mixing CUDA extension with CUTLASS headers, excluding the deprecated fused source. |
 | `tests/__init__.py` | Marks the test suite as a Python package for shared test helpers. |
 | `tests/conftest.py` | Supplies deterministic test seeds and skips CUDA-marked tests when NVIDIA CUDA is unavailable. |
 | `tests/reference.py` | Provides matrix-exponential and Fréchet reference calculations and numerical criteria. |
 | `tests/test_benchmark_pipeline.py` | Checks correctness-gate enforcement, pipeline ordering, failure handling, and report/plot orchestration. |
 | `tests/test_benchmarks.py` | Checks benchmark inputs, measurements, report matching, aggregation, precision metrics, and figure exports. |
+| `tests/test_expm_stream_mix.py` | Checks exp/project/impulse composition, missing deprecated registrations, numerical/gradient behavior, precision boundaries, layouts, transforms, compilation, graphs, and large-batch baselines. |
 | `tests/test_integration.py` | Checks matrix-exp registration, compilation, differentiation transforms, autocast, and CUDA graphs. |
 | `tests/test_matrix_exp.py` | Checks matrix-exp numerics, matrix families, scaling, layouts, launch boundaries, streams, and devices. |
 | `tests/test_routing.py` | Checks scoped matrix-exp routing, aliases, fallback selection, invalid inputs, and thread-local behavior. |
@@ -69,17 +74,10 @@ repository and terminology conventions.
 
 ## Pending additions
 
-These files currently exist in the working tree but are not in this repository's
-Git index. This section does not change their Git status.
+No pending additions.
 
 | Path | Purpose |
 |---|---|
-| `benchmarks/ops/expm_stream_mix.py` | Benchmarks N=4 exp/project/impulse forward fusion against the existing unfused CUDA-op composition. |
-| `csrc/expm_stream_mix.cu` | Implements fused N=4 adaptive exponential, projected residual mixing, and rank-one source construction. |
-| `docs/LEXICON.md` | Defines shared vocabulary, symbols, measurement terms, and the residual-addition/temporal-write-back distinction. |
-| `docs/MANIFEST.md` | Provides the canonical Git-index inventory, a purpose for each path, and a coverage check. |
-| `flash_hypercons/ops/expm_stream_mix.py` | Provides the fused forward API, explicit precision policy, validation, and differentiable unfused fallback. |
-| `tests/test_expm_stream_mix.py` | Checks the fused operator, precision boundaries, source construction, dispatch, and integration/fallback behavior. |
 
 ## Check inventory coverage
 

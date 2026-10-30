@@ -52,6 +52,16 @@
       "src/continuous_hc/models/vision/hc_vit.py": "f7d6edb7d2eb60fed7a60d545f781c2fc5c6c106656f93a27f9a4e158592c80e",
       "src/continuous_hc/cli/train_seg.py": "69cd2b2120c7ed91bb48d7ad6233871de731eebc7dca52db49ce615806e117b6"
     },
-    "implementation": "N4 CUDA forward reuses MatrixExpSmall.cuh adaptive t18, then shared-memory Phi and register-local rank-one source. Preserves explicit transition and source operand/result casts. Supplied mean/V direction; A already contains dt. No integral computation, model copy, or new backward kernel. Gradient-enabled calls use existing unfused operators."
+    "implementation": "Historical experimental implementation (not active): N=2..32 CUDA forward reuses MatrixExpSmall.cuh adaptive t18 with local padding and shared rounded Phi; X and impulse remain register-local. Training saves rounded Phi in FP32. Native backward computes all five input gradients, preserving source operand/product/reduction and dPhi rounding. For N4/8/16 with B>=32, state/source gradients share G and dPhi/dv finishing feeds the structured paired exponential directly. N32, other N and small batches reuse stream-mixing backward and Frechet with a fused impulse-gradient kernel. Cross-moment contraction reuses existing SIMT/WMMA kernels; no TF32 reduction of FP32 inputs. Higher derivatives recompute differentiable Phi; unsupported domains/transforms use composition. Preserves mean/V projection, dt in A, impulse semantics and the existing N4 inference launch policy. No integral computation or model integration.",
+    "implementation_sources": {
+      "csrc/expm_stream_mix.cu": "1d1d9617ff08b700a8ebb2970172fbde62da10c98dbcfd98808ecedd14fc7dbc",
+      "csrc/MatrixExpSmall.cuh": "d7c2b0da677cf0565445b25939c669fdb4fd5918d7f94f28bb6476e3ed1c534d",
+      "csrc/stream_mix.cu": "457a6cf5c32f2436a5860bc4d242caae4812725142711ed97bbd1b893208b0d5",
+      "csrc/register.cpp": "c3edf586e4e9cc502424fecd18f858dfa43a5e0eafb1402d3d3a4acc3312e20a",
+      "flash_hypercons/ops/expm_stream_mix.py": "0f3c72293e5dc5fbd072a60a811d470b21a2b886ec958bfde7e91cb2f3038f43",
+      "setup.py": "548be05d2465d774a39c0823dac038cc47339781674b62f17665c56b9f820ec0"
+    },
+    "status": "deprecated: CUDA source retained, excluded from build and registration; public API composes standalone operators",
+    "public_api": "matrix_exp_stream_mix_project validates inputs and composes matrix_exp, explicit transition/source casts, and stream_mix_project for all dtypes. Compilation is caller-controlled."
   }
 }

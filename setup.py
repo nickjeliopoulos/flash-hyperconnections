@@ -15,7 +15,8 @@ setup(
     ext_modules=[
         CUDAExtension(
             "flash_hypercons._C",
-            ["csrc/register.cpp", "csrc/matrix_exp.cu", "csrc/stream_mix.cu", "csrc/expm_stream_mix.cu"],
+            # Deprecated expm_stream_mix.cu remains in the source archive, unbuilt.
+            ["csrc/register.cpp", "csrc/matrix_exp.cu", "csrc/stream_mix.cu"],
             include_dirs=[str(CUTLASS)],
             extra_compile_args={"cxx": ["-O3"], "nvcc": ["-O3", "-lineinfo", "--expt-relaxed-constexpr"]},
         )

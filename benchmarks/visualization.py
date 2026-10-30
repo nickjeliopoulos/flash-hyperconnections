@@ -112,7 +112,8 @@ def plot_speedup(ax, labels, timings, *, baseline, colors=None):
     ax.margins(y=0.22)
     ax.grid(axis="y", alpha=0.22, linestyle=":")
     ax.set_axisbelow(True)
-    ax.legend(frameon=False)
+    # A legend inside the axes can cover the latency labels near equal speedups.
+    ax.legend(frameon=False, loc="upper left", bbox_to_anchor=(1.02, 1))
     return ax
 
 

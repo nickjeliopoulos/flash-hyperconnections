@@ -94,21 +94,35 @@ report's `benchmark` metadata records its group and name; the existing per-row
 
 ## Measurements and interpretation
 
-The N=4 exp/project/impulse forward fusion uses:
+The exp/project/impulse forward operator uses:
 
 ```bash
-python -m benchmarks.run expm_stream_mix -- --wall
+python -m benchmarks.run expm_stream_mix -- --n 4 8 16 32 --wall
+python -m benchmarks.run expm_stream_mix -- --n 4 8 16 32 --backward --wall
 ```
 
-Defaults cover B=256…24,576 and D=768 with FP32/BF16 residuals and BF16
-transition/source boundaries. Baselines compose the existing CUDA exp and
+Defaults cover N=4/8/16/32, B=256…24,576 and D=768 with FP32/BF16 residuals
+and BF16 transition/source boundaries. `current-op` measures the public
+`matrix_exp_stream_mix_project` call, which now composes the separate operators
+for every residual dtype. The deprecated fused implementation is not built or
+registered. The benchmark does not compile `current-op`; callers can compile
+the public helper themselves. The direct `unfused-eager` baseline omits the
+helper's public validation, while `unfused-compiled` compiles the composition.
+The operator also supports intermediate N=2…32 sizes.
+Each case records the observed
+custom-op dispatch and execution path outside the timed region. Use `--n 4`
+for the original N=4 workload. Baselines compose the existing CUDA exp and
 stream-mixing operators, either eagerly or with static-shape `torch.compile`
 for the intervening casts and rank-one source. Compilation uses
 `emulate_precision_casts=True` to preserve BF16 operand rounding. Graph times
 include casts and intermediate/output memory traffic but exclude host dispatch
 and allocation overhead; optional wall times include public-wrapper overhead.
-Both run under `no_grad`, exclude
-generator construction and the module, and make no backward or full-model claim.
+The default measures forward under `no_grad`. `--backward` instead measures
+forward plus `autograd.grad` for all five inputs, with
+identical upstream gradients across backends. Reports retain the upstream hash
+and observed training/backward dispatch. This is not backward-only latency.
+Both scopes exclude generator construction and the module; neither measures
+full-model training throughput.
 
 Projected stream mixing uses the same driver:
 

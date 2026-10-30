@@ -4,7 +4,6 @@
 #include <tuple>
 
 namespace flash_hypercons {
-at::Tensor expm_stream_mix_project_cuda(const at::Tensor&, const at::Tensor&, const at::Tensor&, const at::Tensor&, const at::Tensor&, double, at::ScalarType);
 at::Tensor matrix_exp_cuda(const at::Tensor& a);
 at::Tensor frechet_cuda(const at::Tensor& a, const at::Tensor& direction);
 at::Tensor stream_mix_project_cuda(const at::Tensor&, const at::Tensor&, const at::Tensor&, const at::Tensor&, double);
@@ -13,7 +12,6 @@ std::tuple<at::Tensor, at::Tensor, at::Tensor> stream_mix_project_backward_cuda(
 }
 
 TORCH_LIBRARY(flash_hypercons, m) {
-  m.def("_expm_stream_mix_project(Tensor a, Tensor x, Tensor w, Tensor z, Tensor v, float projection_decay=1.0, ScalarType mixing_dtype=6) -> Tensor");
   m.def("_matrix_exp(Tensor input) -> Tensor");
   m.def("_frechet(Tensor input, Tensor direction) -> Tensor");
   m.def("_stream_mix_project(Tensor phi, Tensor x, Tensor y, Tensor v, float projection_decay=1.0) -> Tensor");
@@ -21,7 +19,6 @@ TORCH_LIBRARY(flash_hypercons, m) {
 }
 
 TORCH_LIBRARY_IMPL(flash_hypercons, CUDA, m) {
-  m.impl("_expm_stream_mix_project", &flash_hypercons::expm_stream_mix_project_cuda);
   m.impl("_matrix_exp", &flash_hypercons::matrix_exp_cuda);
   m.impl("_frechet", &flash_hypercons::frechet_cuda);
   m.impl("_stream_mix_project", &flash_hypercons::stream_mix_project_cuda);

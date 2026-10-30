@@ -527,17 +527,11 @@ bool launch_cross_moment_simt(const at::Tensor& x, const at::Tensor& g,
 }
 
 template <typename T, int N>
-void launch_cross_backward(const at::Tensor& p, const at::Tensor& x,
-    const at::Tensor& g, const at::Tensor& v, const at::Tensor& h,
-    const at::Tensor& dp, const at::Tensor& dx, const at::Tensor& dv, bool tensor_eligible, float decay) {
-  const int64_t b = x.size(0), d = x.size(2), tiles = (d + threads - 1) / threads;
+void launch_cross_moment_only(const at::Tensor& x, const at::Tensor& g,
+    const at::Tensor& h, bool tensor_eligible, cudaStream_t stream) {
+  const int64_t b = x.size(0), d = x.size(2);
   constexpr int row_group = N < 8 ? N : 8;
   const int64_t tasks = b * (N / row_group);
-  const auto stream = at::cuda::getCurrentCUDAStream();
-  project_moments_dx<T, N, false><<<blocks(b * tiles), threads, 0, stream>>>(
-      p.const_data_ptr<float>(), nullptr, g.const_data_ptr<T>(), v.const_data_ptr<float>(),
-      nullptr, nullptr, dx.mutable_data_ptr<T>(), d, tiles, b * tiles, decay);
-  C10_CUDA_KERNEL_LAUNCH_CHECK();
   bool contracted = false;
   if constexpr (N == 16 || N == 32) {
     if constexpr (std::is_same_v<T, float>) {
@@ -554,6 +548,19 @@ void launch_cross_backward(const at::Tensor& p, const at::Tensor& x,
     project_cross_moment<T, N><<<blocks(tasks), row_group * 32, 0, stream>>>(
         x.const_data_ptr<T>(), g.const_data_ptr<T>(), h.mutable_data_ptr<float>(), d, tasks);
   C10_CUDA_KERNEL_LAUNCH_CHECK();
+}
+
+template <typename T, int N>
+void launch_cross_backward(const at::Tensor& p, const at::Tensor& x,
+    const at::Tensor& g, const at::Tensor& v, const at::Tensor& h,
+    const at::Tensor& dp, const at::Tensor& dx, const at::Tensor& dv, bool tensor_eligible, float decay) {
+  const int64_t b = x.size(0), d = x.size(2), tiles = (d + threads - 1) / threads;
+  const auto stream = at::cuda::getCurrentCUDAStream();
+  project_moments_dx<T, N, false><<<blocks(b * tiles), threads, 0, stream>>>(
+      p.const_data_ptr<float>(), nullptr, g.const_data_ptr<T>(), v.const_data_ptr<float>(),
+      nullptr, nullptr, dx.mutable_data_ptr<T>(), d, tiles, b * tiles, decay);
+  C10_CUDA_KERNEL_LAUNCH_CHECK();
+  launch_cross_moment_only<T, N>(x, g, h, tensor_eligible, stream);
   project_finish_cross_moment<N><<<blocks(b), threads, 0, stream>>>(p.const_data_ptr<float>(),
       v.const_data_ptr<float>(), h.const_data_ptr<float>(), dp.mutable_data_ptr<float>(),
       dv.mutable_data_ptr<float>(), b, decay);
@@ -616,6 +623,28 @@ void rows(const at::Tensor& phi, const at::Tensor& x, const at::Tensor& y,
   C10_CUDA_KERNEL_LAUNCH_CHECK();
 }
 } // namespace
+
+// Internal contraction shared by standalone and exp/mix backward. Inputs are
+// validated and prepared by the callers; no public operator registration.
+at::Tensor stream_mix_cross_moment_cuda(const at::Tensor& x, const at::Tensor& g) {
+  const int64_t b = x.size(0), d = x.size(2);
+  const int n = x.size(1);
+  auto h = at::empty({b, n, n}, x.options().dtype(at::kFloat));
+  const bool tensor_eligible = x.scalar_type() != at::kFloat && d % 16 == 0 && d <= 2147483647 &&
+      uintptr_t(x.data_ptr()) % 32 == 0 && uintptr_t(g.data_ptr()) % 32 == 0 &&
+      at::cuda::getCurrentDeviceProperties()->major >= 8;
+  const auto stream = at::cuda::getCurrentCUDAStream();
+  AT_DISPATCH_FLOATING_TYPES_AND2(at::kHalf, at::kBFloat16, x.scalar_type(), "expm_stream_cross_moment", [&] {
+    switch (n) {
+      case 4: launch_cross_moment_only<scalar_t, 4>(x, g, h, tensor_eligible, stream); break;
+      case 8: launch_cross_moment_only<scalar_t, 8>(x, g, h, tensor_eligible, stream); break;
+      case 16: launch_cross_moment_only<scalar_t, 16>(x, g, h, tensor_eligible, stream); break;
+      case 32: launch_cross_moment_only<scalar_t, 32>(x, g, h, tensor_eligible, stream); break;
+      default: TORCH_CHECK(false, "cross moment requires N=4/8/16/32");
+    }
+  });
+  return h;
+}
 
 at::Tensor stream_mix_project_cuda(const at::Tensor& phi, const at::Tensor& x,
     const at::Tensor& y, const at::Tensor& v, double decay) {
